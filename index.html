@@ -8,7 +8,7 @@
   :root{
     --bg:#0c0e16; --panel:#151826; --panel2:#1d2133; --line:#2a2f45;
     --txt:#e8ecf6; --dim:#8b93ad; --accent:#ff3b6b; --slide:#2ec4ff;
-    --touch:#19e6c8; --brk:#ffb22e; --hold:#ff5c8a;
+    --touch:#19e6c8; --brk:#ff7a1e; --each:#ffd23b; --hold:#ff5c8a;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
@@ -30,7 +30,7 @@
   input[type=range]{flex:1;accent-color:var(--accent)}
   select,textarea{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:8px;padding:8px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
-  textarea{width:100%;min-height:220px;resize:vertical;line-height:1.45;tab-size:2}
+  textarea{width:100%;min-height:200px;resize:vertical;line-height:1.45;tab-size:2}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
   .panel h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:600}
   .time{font-variant-numeric:tabular-nums;font-size:13px;color:var(--dim);min-width:96px;text-align:right}
@@ -42,6 +42,7 @@
   .err{color:#ff7a7a;font-size:12px;min-height:16px}
   .mini{width:100%;height:34px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;display:block}
   .speedwrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+  input[type=file]{font-size:12px;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -76,6 +77,7 @@
         <span><i class="dot" style="background:var(--hold)"></i>Hold</span>
         <span><i class="dot" style="background:var(--slide)"></i>Slide</span>
         <span><i class="dot" style="background:var(--touch)"></i>Touch</span>
+        <span><i class="dot" style="background:var(--each)"></i>Each</span>
         <span><i class="dot" style="background:var(--brk)"></i>Break</span>
       </div>
     </div>
@@ -98,11 +100,21 @@
       <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
     </div>
     <div class="panel">
+      <h2>Sensor map (background)</h2>
+      <label class="fld">Drop in a custom sensor-map PNG to show behind the playfield.
+        <input id="sensorfile" type="file" accept="image/*">
+      </label>
+      <div class="row" style="margin-top:8px">
+        <button id="sensorclear">Use built-in map</button>
+      </div>
+    </div>
+    <div class="panel">
       <h2>Notes</h2>
       <p style="font-size:12px;color:var(--dim);line-height:1.6;margin:0">
         Paste a full <code>maidata.txt</code> (with <code>&amp;inote_x=</code> blocks) or just a raw note body.
-        Notes fly outward from the centre and land on the ring at their hit time — scrub or play to inspect.
-        Slide curves for <code>p q s z</code> are visual approximations; <code>- ^ &lt; &gt; v V w</code> are geometric.
+        Notes fly outward and land on the ring at their hit time. Simultaneous (each) notes are
+        <span style="color:var(--each)">yellow</span>, breaks are <span style="color:var(--brk)">orange</span>.
+        Slide curves for <code>p q s z</code> are visual approximations.
       </p>
     </div>
   </div>
@@ -186,9 +198,24 @@ function parseSimai(raw){
     if(c==='E'){i++;continue;}
     parseNote(time);
   }
+  markEach(notes);
   let duration=0;for(const nt of notes){const e=nt.time+(nt.dur||0);if(e>duration)duration=e;}
   for(const nt of notes)nt.time+=first;
   return{bpm,first,notes,duration:duration+first+1.5};
+}
+// Tag simultaneous ("each") notes. A slide and its own auto-generated head tap
+// count as one object, so a lone slide is not mistaken for an each.
+function markEach(notes){
+  const groups={};
+  for(const nt of notes){
+    if(nt.slideHead)continue;
+    const k=Math.round(nt.time*1000);
+    (groups[k]=groups[k]||[]).push(nt);
+  }
+  for(const nt of notes){
+    const k=Math.round(nt.time*1000);
+    nt.each=(groups[k]&&groups[k].length>=2);
+  }
 }
 function extractCharts(text){
   const meta={},charts={};
@@ -204,13 +231,18 @@ function extractCharts(text){
 /* ============================ geometry ============================ */
 const cv=document.getElementById('ring'),ctx=cv.getContext('2d');
 const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
-const RING=W*0.40;        // button ring radius
-const NOTE_R=W*0.022;
+const RING=W*0.40;          // outer button-ring radius
+const INNER=0.20;           // notes spawn here (fraction of RING), never the dead centre
+const NOTE_R=W*0.024;
+const clamp01=u=>u<0?0:u>1?1:u;
 function posAngle(p){return (22.5+(p-1)*45)*Math.PI/180;} // clockwise from top
 function ptOnRing(p,r){const a=posAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
 function gapAngle(p){return ((p-1)*45)*Math.PI/180;} // between-button slots for D/E
 function ptGap(p,r){const a=gapAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
 const wrap8=p=>((p-1+8)%8)+1;
+// Approach radius (in pixels) for a note travelling from the inner spawn to the ring.
+function approachRadius(u){return RING*(INNER+(1-INNER)*clamp01(u));}
+function approachU(t,T,lead){return (t-(T-lead))/lead;}
 
 function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
 function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
@@ -270,6 +302,7 @@ function alongPoly(pts,u){
     if(acc+d>=target){const f=(target-acc)/(d||1);return lerp(pts[k-1],pts[k],f);}acc+=d;}
   return pts[pts.length-1];
 }
+function tangentAt(pts,u){const a=alongPoly(pts,Math.max(0,u-0.005)),b=alongPoly(pts,Math.min(1,u+0.005));return Math.atan2(b.y-a.y,b.x-a.x);}
 function touchPoint(note){
   const area=note.area;
   if(area==='C')return{x:CX,y:CY};
@@ -280,103 +313,213 @@ function touchPoint(note){
   return{x:CX,y:CY};
 }
 
-/* ============================ rendering ============================ */
-const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#19e6c8',brk:'#ffb22e'};
-function drawBoard(){
-  ctx.clearRect(0,0,W,H);
-  // ring + sensor guides
-  ctx.strokeStyle='rgba(255,255,255,.07)';ctx.lineWidth=2;
-  ctx.beginPath();ctx.arc(CX,CY,RING,0,7);ctx.stroke();
-  ctx.beginPath();ctx.arc(CX,CY,RING*0.52,0,7);ctx.stroke();
-  // radial guides
-  for(let p=1;p<=8;p++){const g=ptGap(p,RING);
-    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(g.x,g.y);ctx.stroke();}
-  // buttons
-  for(let p=1;p<=8;p++){const b=ptOnRing(p,RING);
-    ctx.fillStyle='#222a40';ctx.strokeStyle='#39415f';ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(b.x,b.y,W*0.028,0,7);ctx.fill();ctx.stroke();
-    ctx.fillStyle='#8b93ad';ctx.font=`600 ${W*0.026}px ui-sans-serif`;
-    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(p,b.x,b.y);}
-}
-function noteColor(nt){return nt.break?COL.brk:(nt.type==='slide'?COL.slide:nt.type==='hold'?COL.hold:nt.type==='touch'||nt.type==='touchHold'?COL.touch:COL.tap);}
+/* ============================ sensor map (background) ============================ */
+const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#19e6c8',brk:'#ff7a1e',each:'#ffd23b'};
+const boardCv=document.createElement('canvas');boardCv.width=W;boardCv.height=H;
+const bctx=boardCv.getContext('2d');
+let sensorImg=null;
 
+// Drop a data-URL / path here (or use the file picker) to render your own PNG.
+const SENSOR_IMG_SRC="";
+
+function drawSensorMap(g){
+  const rOuter=RING, rB=RING*0.58, rC=RING*0.27;
+  if(sensorImg){
+    g.save();
+    g.beginPath();g.arc(CX,CY,rOuter,0,7);g.clip();
+    g.drawImage(sensorImg,CX-rOuter,CY-rOuter,rOuter*2,rOuter*2);
+    g.restore();
+    g.strokeStyle='rgba(150,170,210,.25)';g.lineWidth=2;
+    g.beginPath();g.arc(CX,CY,rOuter,0,7);g.stroke();
+    return;
+  }
+  // Procedural maimai sensor layout: A (outer) / B (mid) / C (centre), plus D/E corner sensors.
+  g.save();
+  // zone tints
+  g.fillStyle='rgba(40,52,84,.20)';g.beginPath();g.arc(CX,CY,rOuter,0,7);g.fill();
+  g.fillStyle='rgba(24,32,56,.35)';g.beginPath();g.arc(CX,CY,rB,0,7);g.fill();
+  g.fillStyle='rgba(40,52,84,.25)';g.beginPath();g.arc(CX,CY,rC,0,7);g.fill();
+  // concentric boundaries
+  g.strokeStyle='rgba(120,140,190,.20)';g.lineWidth=1.5;
+  [rOuter,rB,rC].forEach(r=>{g.beginPath();g.arc(CX,CY,r,0,7);g.stroke();});
+  // radial dividers at gap angles
+  for(let p=1;p<=8;p++){const a=gapAngle(p);
+    g.beginPath();g.moveTo(CX+Math.sin(a)*rC,CY-Math.cos(a)*rC);
+    g.lineTo(CX+Math.sin(a)*rOuter,CY-Math.cos(a)*rOuter);g.stroke();}
+  // A / B / C labels
+  g.fillStyle='rgba(150,170,210,.30)';g.textAlign='center';g.textBaseline='middle';
+  g.font=`${W*0.017}px ui-sans-serif`;
+  for(let p=1;p<=8;p++){
+    const a=ptOnRing(p,RING*0.80), b=ptOnRing(p,RING*0.44);
+    g.fillText('A'+p,a.x,a.y);g.fillText('B'+p,b.x,b.y);
+  }
+  g.fillText('C',CX,CY);
+  // D / E corner sensors
+  g.fillStyle='rgba(120,140,190,.32)';
+  for(let p=1;p<=8;p++){
+    const d=ptGap(p,RING*0.92), e=ptGap(p,RING*0.50);
+    g.beginPath();g.arc(d.x,d.y,W*0.0085,0,7);g.fill();
+    g.beginPath();g.arc(e.x,e.y,W*0.0085,0,7);g.fill();
+  }
+  g.restore();
+}
+function drawButtons(g){
+  for(let p=1;p<=8;p++){const b=ptOnRing(p,RING);
+    g.fillStyle='#222a40';g.strokeStyle='#3a4566';g.lineWidth=2;
+    g.beginPath();g.arc(b.x,b.y,W*0.026,0,7);g.fill();g.stroke();
+    g.fillStyle='#aab3cf';g.font=`600 ${W*0.024}px ui-sans-serif`;
+    g.textAlign='center';g.textBaseline='middle';g.fillText(p,b.x,b.y);}
+}
+function buildBoard(){bctx.clearRect(0,0,W,H);drawSensorMap(bctx);drawButtons(bctx);}
+function setSensorImage(src){const im=new Image();im.onload=()=>{sensorImg=im;buildBoard();frame(true);};im.src=src;}
+
+/* ============================ note rendering ============================ */
+function noteColor(nt){
+  if(nt.break) return COL.brk;            // orange (also for simultaneous breaks)
+  if(nt.each)  return COL.each;            // yellow for every simultaneous note
+  if(nt.type==='slide') return COL.slide;
+  if(nt.type==='hold')  return COL.hold;
+  if(nt.type==='touch'||nt.type==='touchHold') return COL.touch;
+  return COL.tap;
+}
+function diamondPath(s){ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s,0);ctx.lineTo(0,s);ctx.lineTo(-s,0);ctx.closePath();}
+function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4+Math.PI/8;const x=Math.cos(a)*s,y=Math.sin(a)*s;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.closePath();}
+
+// Tap/slide-head: a ring (donut) that is blank in the middle so the sensor map shows through.
+function drawTap(p,col,brk,ex){
+  ctx.save();
+  ctx.shadowColor=col;ctx.shadowBlur=12;
+  ctx.beginPath();
+  ctx.arc(p.x,p.y,NOTE_R,0,7);
+  ctx.arc(p.x,p.y,NOTE_R*0.52,0,7,true);   // hole
+  ctx.fillStyle=col;ctx.fill('evenodd');
+  ctx.shadowBlur=0;
+  ctx.lineWidth=ex?3.5:2.4;ctx.strokeStyle=ex?'#ffffff':'rgba(255,255,255,.85)';
+  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R,0,7);ctx.stroke();
+  ctx.lineWidth=1.6;ctx.strokeStyle='rgba(255,255,255,.6)';
+  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R*0.52,0,7);ctx.stroke();
+  if(brk){
+    ctx.strokeStyle='#ffe2b0';ctx.lineWidth=2;
+    for(let k=0;k<8;k++){const a=k*Math.PI/4;ctx.beginPath();
+      ctx.moveTo(p.x+Math.cos(a)*(NOTE_R+5),p.y+Math.sin(a)*(NOTE_R+5));
+      ctx.lineTo(p.x+Math.cos(a)*(NOTE_R+11),p.y+Math.sin(a)*(NOTE_R+11));ctx.stroke();}
+  }
+  ctx.restore();
+}
+// Hold: a capsule drawn as two parallel rails (blank middle) between tail and head radii.
+function drawHold(angle,rTail,rHead,col,brk,ex){
+  const rad={x:Math.sin(angle),y:-Math.cos(angle)};
+  const per={x:Math.cos(angle),y:Math.sin(angle)};
+  const off=NOTE_R*0.85;
+  const t={x:CX+rad.x*rTail,y:CY+rad.y*rTail};
+  const h={x:CX+rad.x*rHead,y:CY+rad.y*rHead};
+  ctx.save();
+  ctx.shadowColor=col;ctx.shadowBlur=10;
+  ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.42;ctx.lineCap='round';
+  for(const s of [1,-1]){
+    ctx.beginPath();
+    ctx.moveTo(t.x+per.x*off*s,t.y+per.y*off*s);
+    ctx.lineTo(h.x+per.x*off*s,h.y+per.y*off*s);
+    ctx.stroke();
+  }
+  // end caps
+  ctx.lineWidth=NOTE_R*0.42;
+  ctx.beginPath();ctx.arc(t.x,t.y,off,angle+Math.PI/2,angle+3*Math.PI/2);ctx.stroke();
+  ctx.shadowBlur=0;ctx.restore();
+  drawTap(h,col,brk,ex);
+}
+function drawStar(p,col,rot){
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
+  ctx.shadowColor=col;ctx.shadowBlur=16;ctx.fillStyle=col;
+  ctx.beginPath();const R=NOTE_R*1.2,r=R*0.46;
+  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
+    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+  ctx.closePath();ctx.fill();
+  ctx.lineWidth=2;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.stroke();
+  ctx.restore();
+}
+function drawChevron(p,ang,col,alpha){
+  const s=NOTE_R*0.85;
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
+  ctx.globalAlpha=alpha;ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.4;
+  ctx.lineCap='round';ctx.lineJoin='round';
+  ctx.beginPath();ctx.moveTo(-s*0.45,-s*0.7);ctx.lineTo(s*0.55,0);ctx.lineTo(-s*0.45,s*0.7);ctx.stroke();
+  ctx.restore();ctx.globalAlpha=1;
+}
+// A slide track drawn as a line of chevrons pointing along travel; passed ones dim.
+function drawChevronTrack(pts,col,headU){
+  const total=polyLen(pts);if(total<1)return;
+  const spacing=NOTE_R*1.9;
+  const count=Math.max(2,Math.round(total/spacing));
+  for(let k=1;k<count;k++){
+    const u=k/count;
+    const p=alongPoly(pts,u);
+    drawChevron(p,tangentAt(pts,u),col,u<headU?0.16:0.92);
+  }
+}
+function drawTouch(p,col,u,fire){
+  ctx.save();ctx.translate(p.x,p.y);
+  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=fire?16:8;
+  ctx.lineWidth=3;diamondPath(NOTE_R*(0.8+0.9*(1-u)));ctx.stroke();   // shrinking guide
+  ctx.lineWidth=3.5;diamondPath(NOTE_R*0.75);ctx.stroke();            // hollow body
+  ctx.restore();
+}
+function drawTouchHold(p,col,u,active,holdU,fire){
+  ctx.save();ctx.translate(p.x,p.y);
+  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=active?18:8;
+  if(!active){ctx.lineWidth=3;diamondPath(NOTE_R*(0.9+0.9*(1-u)));ctx.stroke();}
+  ctx.lineWidth=NOTE_R*0.42;octagonPath(NOTE_R*0.9);ctx.stroke();     // hollow octagon body
+  if(active){                                                          // countdown ring
+    ctx.lineWidth=3;ctx.beginPath();
+    ctx.arc(0,0,NOTE_R*1.5,-Math.PI/2,-Math.PI/2+(1-clamp01(holdU))*2*Math.PI);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ============================ frame composition ============================ */
+function drawBoard(){ctx.clearRect(0,0,W,H);ctx.drawImage(boardCv,0,0);}
 function render(chart,t,lead){
   drawBoard();
   if(!chart)return;
   for(const nt of chart.notes){
-    const T=nt.time;
+    const T=nt.time, col=noteColor(nt);
     if(nt.type==='tap'){
       if(t<T-lead||t>T+0.13)continue;
-      const u=Math.min(1,(t-(T-lead))/lead); const b=ptOnRing(nt.pos,RING*u);
-      drawTap(b,noteColor(nt),nt.break,nt.ex,u);
+      drawTap(ptOnRing(nt.pos,approachRadius(approachU(t,T,lead))),col,nt.break,nt.ex);
     }else if(nt.type==='hold'){
       const end=T+nt.dur;
       if(t<T-lead||t>end+0.13)continue;
       const a=posAngle(nt.pos);
-      if(t<T){const u=Math.min(1,(t-(T-lead))/lead);drawTap(ptOnRing(nt.pos,RING*u),COL.hold,nt.break,nt.ex,u);}
-      // body bar while held
-      if(t>=T&&t<=end){
-        const r0=RING*0.30,r1=RING;
-        ctx.strokeStyle=nt.break?COL.brk:COL.hold;ctx.lineWidth=W*0.03;ctx.lineCap='round';
-        ctx.globalAlpha=.85;
-        ctx.beginPath();ctx.moveTo(CX+Math.sin(a)*r0,CY-Math.cos(a)*r0);ctx.lineTo(CX+Math.sin(a)*r1,CY-Math.cos(a)*r1);ctx.stroke();
-        ctx.globalAlpha=1;
-        drawTap(ptOnRing(nt.pos,RING),nt.break?COL.brk:COL.hold,nt.break,nt.ex,1);
-      }
+      const rHead=approachRadius(approachU(t,T,lead));
+      const rTail=approachRadius(approachU(t,end,lead));
+      drawHold(a,rTail,rHead,col,nt.break,nt.ex);
     }else if(nt.type==='slide'){
-      const guideStart=T-lead*0.7, end=T+(nt.dur||0.3);
-      if(t<guideStart||t>end+0.1)continue;
+      const end=T+(nt.dur||0.3);
+      if(t<T-lead*0.85||t>end+0.1)continue;
       const polys=slidePolylines(nt);
-      const col=nt.break?COL.brk:COL.slide;
-      // guide
-      const passed=t>end-0.001;
-      ctx.globalAlpha=passed?.18:(t<T?0.30:0.5);
-      ctx.strokeStyle=col;ctx.lineWidth=W*0.012;ctx.lineCap='round';ctx.lineJoin='round';
-      for(const line of [polys.main,...polys.extra]){
-        ctx.beginPath();ctx.moveTo(line[0].x,line[0].y);for(let k=1;k<line.length;k++)ctx.lineTo(line[k].x,line[k].y);ctx.stroke();
+      const moving=t>=T&&t<=end;
+      const headU=moving?(t-T)/(nt.dur||0.3):0;
+      drawChevronTrack(polys.main,col,headU);
+      for(const ex of polys.extra)drawChevronTrack(ex,col,headU);
+      // head star approaches until the slide starts moving
+      if(t<T)drawStar(ptOnRing(nt.from,approachRadius(approachU(t,T,lead))),col,0);
+      // travelling star spins faster the faster the slide moves
+      if(moving){
+        const u=clamp01(headU);
+        const speed=polyLen(polys.main)/(nt.dur||0.3);   // px per second
+        const rot=t*(speed/RING)*2.2;
+        drawStar(alongPoly(polys.main,u),col,rot);
       }
-      ctx.globalAlpha=1;
-      // travelling star
-      if(t>=T&&t<=end){const u=(t-T)/(nt.dur||0.3);const sp=alongPoly(polys.main,Math.min(1,u));drawStar(sp,col);}
-    }else if(nt.type==='touch'||nt.type==='touchHold'){
+    }else if(nt.type==='touch'){
+      if(t<T-lead||t>T+0.16)continue;
+      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);
+    }else if(nt.type==='touchHold'){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>end+0.13)continue;
-      const p=touchPoint(nt);const u=Math.min(1,(t-(T-lead))/lead);
-      drawTouch(p,COL.touch,u,nt.fire);
-      if(nt.type==='touchHold'&&t>=T&&t<=end){drawTouch(p,COL.touch,1,nt.fire);}
+      const active=t>=T&&t<=end;
+      drawTouchHold(touchPoint(nt),col,clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire);
     }
   }
-}
-function drawTap(p,col,brk,ex,u){
-  ctx.save();
-  ctx.shadowColor=col;ctx.shadowBlur=14;
-  ctx.fillStyle=col;
-  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R,0,7);ctx.fill();
-  ctx.shadowBlur=0;
-  ctx.lineWidth=3;ctx.strokeStyle=ex?'#ffffff':(brk?'#fff3d6':'rgba(255,255,255,.6)');
-  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R+(brk?4:2),0,7);ctx.stroke();
-  if(brk){ // spikes
-    ctx.strokeStyle='#fff3d6';ctx.lineWidth=2;
-    for(let k=0;k<8;k++){const a=k*Math.PI/4;ctx.beginPath();
-      ctx.moveTo(p.x+Math.cos(a)*(NOTE_R+5),p.y+Math.sin(a)*(NOTE_R+5));
-      ctx.lineTo(p.x+Math.cos(a)*(NOTE_R+10),p.y+Math.sin(a)*(NOTE_R+10));ctx.stroke();}
-  }
-  ctx.restore();
-}
-function drawStar(p,col){
-  ctx.save();ctx.translate(p.x,p.y);ctx.shadowColor=col;ctx.shadowBlur=16;ctx.fillStyle=col;
-  ctx.beginPath();const R=NOTE_R*1.1,r=R*0.45;
-  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
-    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.closePath();ctx.fill();ctx.restore();
-}
-function drawTouch(p,col,u,fire){
-  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(Math.PI/4);
-  const s=NOTE_R*1.2*(0.5+0.5*u);
-  ctx.strokeStyle=col;ctx.lineWidth=3;ctx.shadowColor=col;ctx.shadowBlur=fire?18:8;
-  ctx.strokeRect(-s,-s,s*2,s*2);
-  ctx.globalAlpha=0.25;ctx.fillStyle=col;ctx.fillRect(-s,-s,s*2,s*2);
-  ctx.restore();
 }
 
 /* ============================ mini timeline ============================ */
@@ -386,9 +529,10 @@ function drawMini(chart,t){
   if(!chart||!chart.duration)return;
   const dur=chart.duration;
   for(const nt of chart.notes){
+    if(nt.slideHead)continue;
     const x=(nt.time/dur)*mini.width;
     mctx.fillStyle=noteColor(nt);mctx.globalAlpha=.7;
-    mctx.fillRect(x,4,nt.type==='slide'?2:2,mini.height-8);
+    mctx.fillRect(x,4,2,mini.height-8);
   }
   mctx.globalAlpha=1;
   const px=(t/dur)*mini.width;
@@ -413,15 +557,11 @@ function loadFromSource(){
       for(const k of keys){const o=document.createElement('option');o.value=k;
         o.textContent=`${names[k]||('inote_'+k)}${meta['lv_'+k]?' · Lv '+meta['lv_'+k]:''}`;sel.appendChild(o);}
       $('diffwrap').style.display='';
-      const chosen=parseInt(sel.value,10);
-      body=ex.charts[chosen];
-      if(meta.first)body=body; // first handled below
-      chart=parseSimai(body);
-      if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}
-      sel.onchange=()=>{const k=parseInt(sel.value,10);let b=ex.charts[k];chart=parseSimai(b);
-        if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}
-        resetTransport();showInfo(meta,k);};
-      showInfo(meta,chosen);
+      const build=k=>{let b=ex.charts[k];chart=parseSimai(b);
+        if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}};
+      build(parseInt(sel.value,10));
+      sel.onchange=()=>{build(parseInt(sel.value,10));resetTransport();showInfo(meta,parseInt(sel.value,10));};
+      showInfo(meta,parseInt(sel.value,10));
     }else{
       $('diffwrap').style.display='none';
       chart=parseSimai(body);
@@ -431,8 +571,8 @@ function loadFromSource(){
   }catch(e){$('err').textContent='Parse error: '+e.message;}
 }
 function showInfo(meta,k){
-  const counts={};for(const nt of chart.notes)counts[nt.type]=(counts[nt.type]||0)+1;
-  const total=chart.notes.filter(n=>!(n.type==='tap'&&n.slideHead)).length;
+  const counts={};for(const nt of chart.notes){if(nt.slideHead)continue;counts[nt.type]=(counts[nt.type]||0)+1;}
+  const total=chart.notes.filter(n=>!n.slideHead).length;
   $('info').innerHTML=
     (meta.title?`<span><b>${esc(meta.title)}</b></span>`:'')+
     (meta.artist?`<span>${esc(meta.artist)}</span>`:'')+
@@ -468,33 +608,43 @@ $('seek').oninput=e=>{curT=parseFloat(e.target.value);frame(true);drawMini(chart
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('lead').oninput=e=>{lead=parseFloat(e.target.value);$('leadval').textContent=lead.toFixed(2)+'s';frame(true);};
 $('load').onclick=loadFromSource;
+$('sensorfile').onchange=e=>{const f=e.target.files[0];if(f)setSensorImage(URL.createObjectURL(f));};
+$('sensorclear').onclick=()=>{sensorImg=null;buildBoard();frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
-const SAMPLE=`&title=Sample Pattern
-&artist=viewer demo
+const SAMPLE=`&title=Slide Showcase
+&artist=maiSolver
 &first=0
-&lv_5=10
+&lv_5=13
 &inote_5=
-(160){8}
-1,2,3,4,5,6,7,8,
-{4}
-1h[4:2],5h[4:2],
-2-6[4:1],4-8[4:1],
-{8}
-1,3,5,7,
-3/7,4/8,
-{4}
-1V73[4:1],
+(120){2}
+1-5[4:1],
+1^4[4:1],
+8<4[4:1],
+1>5[4:1],
+2v6[4:1],
+2V46[4:1],
+8p4[8:1],
+8q4[8:1],
+1pp5[2:1],
+1qq5[2:1],
+3s7[4:1],
+7z3[4:1],
 8w4[4:1],
-A1,B5,C,E3,
+1-3-5-7[8:1],
+{4}
+13,57,2468,
+1b,5b,1b5b,
+1h[4:2],
 Ch[4:2],
-{8}
-1b,3,5b,7,
-2-4[8:1]-6[8:1]-8[8:1],
-1,2,3,4,5,6,7,8,
+C,B5,E3,
+1h[4:2]/5,
+17/35,
 E`;
 $('src').value=SAMPLE;
+buildBoard();
+if(SENSOR_IMG_SRC)setSensorImage(SENSOR_IMG_SRC);
 loadFromSource();
 requestAnimationFrame(loop);
 </script>
