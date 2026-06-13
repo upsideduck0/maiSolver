@@ -1,84 +1,66 @@
 # maiSolver
 
-A web-based **maimai DX chart viewer** — and, ultimately, a **hand-movement
-solver** — for [Simai](https://w.atwiki.jp/simai/) (`maidata.txt`) charts, in the
-spirit of [Majdata](https://github.com/LingFeng-bbben/MajdataView) and
+A **maimai DX chart viewer** — and, ultimately, a **hand-movement solver** — for
+[Simai](https://w.atwiki.jp/simai/) (`maidata.txt`) charts, in the spirit of
+[Majdata](https://github.com/LingFeng-bbben/MajdataView) and
 [AstroDX](https://github.com/2394425147/astrodx).
 
 The long-term goal is to read a chart and show *how to play it with two hands*:
 assign every note to a hand and animate the motion. This first milestone is the
 **viewer** — parse Simai and render the playfield with notes flying out to the
-ring, synced to audio — which is the foundation the solver builds on.
+ring — which is the foundation the solver builds on.
 
-## Status
+## How to run it
 
-| Layer | State |
-| --- | --- |
-| Simai parser (taps, holds, slides, touch, BPM/division, breaks/ex, each) | ✅ working, unit-tested |
-| Canvas playfield renderer with note approach animation | ✅ working |
-| Audio-synced playback + transport UI | ✅ working |
-| Hand-assignment solver | ⏳ next milestone |
+**No installation, no Node, no build step.** The whole app is a single file.
 
-## Quick start
+1. Download `index.html` (or open the project folder on your computer).
+2. **Double-click `index.html`** — it opens in your web browser and runs.
 
-```bash
-npm install
-npm run dev      # open the printed localhost URL
-```
+That's it. A demo chart loads automatically.
 
-A demo chart loads automatically. Use **Load → Chart** to open your own
-`maidata.txt`, optionally attach an audio file, pick a difficulty, and press
-**Play** (or Space). The *Note approach* slider controls how long notes take to
-travel from the centre to the ring.
+## Using the viewer
 
-```bash
-npm test         # parser unit tests (Vitest)
-npm run build    # typecheck + production build
-```
+- **Paste a chart** into the *Chart source* box — either a full `maidata.txt`
+  (with `&inote_x=` blocks) or just a raw note body — and click **Load chart**.
+- If the chart has multiple difficulties, pick one from the **Difficulty** menu.
+- Press **Play** to watch, or drag the **seek** slider / click the mini-timeline
+  to scrub to any moment.
+- **Speed** slows playback down; **Approach** controls how long notes take to
+  travel from the centre to the ring.
 
-## How it works
+Notes fly outward from the centre and land on the ring at their hit time, the
+same visual language as the arcade.
 
-The pipeline is three independent, separately testable layers:
-
-1. **Parse** — `src/simai/parser.ts` turns `maidata.txt` into a flat, timed
-   note list (`src/simai/types.ts`). It tracks `(bpm)` and `{division}` changes
-   to convert beats to seconds, and is deliberately permissive: unrecognised
-   syntax produces a warning instead of failing.
-2. **Lay out** — `src/geometry/` maps the 8 buttons and A–E touch sensors to
-   coordinates, and converts each slide shape into a sampled polyline
-   (`slidePaths.ts`) for drawing and constant-speed star animation.
-3. **Render & play** — `src/render/renderer.ts` draws the playfield on a 2D
-   canvas each frame; `src/engine/player.ts` owns the clock and keeps it in sync
-   with the audio track.
-
-### Playfield convention
-
-Outer buttons are numbered **1–8 clockwise**, with the gap between **8 and 1 at
-the top** (12 o'clock) and between **4 and 5 at the bottom**. Button 1 sits at
-67.5° (upper-right). Notes spawn near the centre and reach the ring exactly at
-their hit time.
-
-## Supported Simai subset
+## What it understands (Simai)
 
 - Timing: `(bpm)`, `{division}`, `{#seconds}`, `&first` offset, multiple
   `&inote_N` difficulties.
-- Notes: tap, hold (`h[x:y]`), break (`b`), EX (`x`), forced star (`$`).
+- Notes: tap, hold (`h[x:y]`), break (`b`), EX (`x`).
 - Slides: `- ^ < > v p q pp qq s z V w`, chained (`1-3-5`), with `[x:y]`,
   `[bpm#x:y]`, `[#sec]`, `[##sec]` durations.
 - Touch: `A`/`B`/`C`/`D`/`E` zones, touch hold (`h`), firework (`f`).
-- Each notes: `/` separator and the adjacent-digit shorthand (`15`).
+- Each notes: `/` separator.
 
-Curved slides (`p q pp qq s z w`) are rendered as faithful approximations of the
-arcade trajectories — good enough to read, with room to refine later.
+Curved slides (`p q s z`) are visual approximations of the arcade trajectories;
+`- ^ < > v V w` are geometric.
 
 ## Roadmap to the hand solver
 
-The viewer exposes a clean note timeline, which is exactly the solver's input.
-Planned next:
+The viewer already produces a clean, time-stamped note list, which is exactly
+the solver's input. Planned next:
 
 1. **Cost model** — hand travel distance, crossover penalties, comfort.
-2. **DP / search** over `(left, right)` hand states to assign each note to a
-   hand near-optimally; busy hands (tracing slides / holding) constrain
-   concurrent notes.
+2. **Search** over `(left, right)` hand states to assign each note to a hand
+   near-optimally; busy hands (tracing slides / holding) constrain concurrent
+   notes.
 3. **Hand overlay** — animate two hands moving along the assigned paths on top
    of the existing renderer.
+
+Possible viewer improvements along the way: audio-track sync (load an MP3 so
+notes line up with the music) and loading charts from a file instead of pasting.
+
+---
+
+*An earlier modular TypeScript prototype of the parser/renderer (with unit
+tests) lives in this repository's git history if it's ever useful to revisit.*

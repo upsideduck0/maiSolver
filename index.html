@@ -1,128 +1,502 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>maiSolver — Simai Chart Viewer</title>
-    <style>
-      :root {
-        --bg: #0b0e17;
-        --panel: #141a2b;
-        --panel-2: #1d2440;
-        --text: #e6ebff;
-        --muted: #aeb8d4;
-        --accent: #36a3ff;
-        --accent-2: #ff4f8b;
-      }
-      * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; }
-      body {
-        background: var(--bg);
-        color: var(--text);
-        font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-        display: flex;
-        height: 100vh;
-        overflow: hidden;
-      }
-      #stage {
-        flex: 1;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 0;
-      }
-      #playfield { width: 100%; height: 100%; display: block; }
-      aside {
-        width: 320px;
-        background: var(--panel);
-        border-left: 1px solid #222b45;
-        padding: 18px;
-        overflow-y: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-      }
-      h1 { font-size: 18px; margin: 0; }
-      h1 span { color: var(--accent); }
-      .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-      .card { background: var(--panel-2); border-radius: 10px; padding: 12px; }
-      .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
-      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-      input[type="file"] { width: 100%; font-size: 12px; color: var(--muted); }
-      select, button {
-        font: inherit;
-        color: var(--text);
-        background: #232c4a;
-        border: 1px solid #33406b;
-        border-radius: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-      }
-      select { width: 100%; }
-      button:hover { background: #2c3760; }
-      button.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
-      .row { display: flex; gap: 8px; align-items: center; }
-      .row > * { flex: 1; }
-      .transport { display: flex; gap: 8px; align-items: center; }
-      #seek { width: 100%; }
-      .time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 84px; text-align: right; }
-      .meta-line { display: flex; justify-content: space-between; gap: 8px; }
-      .meta-line span:first-child { color: var(--muted); }
-      #warnings { font-size: 11px; color: #ffae3b; max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
-      .field { display: flex; flex-direction: column; gap: 4px; }
-    </style>
-  </head>
-  <body>
-    <div id="stage">
-      <canvas id="playfield"></canvas>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maimai simai viewer</title>
+<style>
+  :root{
+    --bg:#0c0e16; --panel:#151826; --panel2:#1d2133; --line:#2a2f45;
+    --txt:#e8ecf6; --dim:#8b93ad; --accent:#ff3b6b; --slide:#2ec4ff;
+    --touch:#19e6c8; --brk:#ffb22e; --hold:#ff5c8a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{display:flex;gap:16px;padding:16px;height:100%;min-height:100vh}
+  @media(max-width:920px){.wrap{flex-direction:column;height:auto}}
+  .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
+  .side{flex:1 1 auto;min-width:280px;display:flex;flex-direction:column;gap:14px}
+  canvas#ring{background:radial-gradient(circle at 50% 50%,#10131f,#080a11);
+    border-radius:50%;box-shadow:0 0 0 1px var(--line),0 20px 60px rgba(0,0,0,.5);
+    width:min(72vh,520px);height:min(72vh,520px);touch-action:none}
+  .transport{display:flex;flex-direction:column;gap:10px;width:min(72vh,520px);max-width:100%}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
+  button:hover{border-color:#4a5170}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#1a0410;font-weight:600}
+  button:disabled{opacity:.4;cursor:default}
+  input[type=range]{flex:1;accent-color:var(--accent)}
+  select,textarea{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;padding:8px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  textarea{width:100%;min-height:220px;resize:vertical;line-height:1.45;tab-size:2}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .panel h2{margin:0 0 10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);font-weight:600}
+  .time{font-variant-numeric:tabular-nums;font-size:13px;color:var(--dim);min-width:96px;text-align:right}
+  label.fld{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
+  .meta b{color:var(--txt);font-weight:600}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .err{color:#ff7a7a;font-size:12px;min-height:16px}
+  .mini{width:100%;height:34px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;display:block}
+  .speedwrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stage">
+    <canvas id="ring" width="720" height="720"></canvas>
+    <div class="transport">
+      <canvas id="mini" class="mini" width="1040" height="34"></canvas>
+      <div class="row">
+        <button id="play" class="primary">▶ Play</button>
+        <button id="stop">⏹ Stop</button>
+        <input id="seek" type="range" min="0" max="100" step="0.01" value="0">
+        <span class="time" id="tlabel">0.00 / 0.00</span>
+      </div>
+      <div class="row">
+        <div class="speedwrap">Speed
+          <select id="speed">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+          </select>
+        </div>
+        <div class="speedwrap">Approach
+          <input id="lead" type="range" min="0.3" max="1.6" step="0.05" value="0.85" style="width:120px">
+          <span id="leadval">0.85s</span>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--accent)"></i>Tap</span>
+        <span><i class="dot" style="background:var(--hold)"></i>Hold</span>
+        <span><i class="dot" style="background:var(--slide)"></i>Slide</span>
+        <span><i class="dot" style="background:var(--touch)"></i>Touch</span>
+        <span><i class="dot" style="background:var(--brk)"></i>Break</span>
+      </div>
     </div>
-    <aside>
-      <div>
-        <h1>mai<span>Solver</span></h1>
-        <div class="sub">Simai chart viewer</div>
-      </div>
+  </div>
 
-      <div class="card">
-        <h2>Load</h2>
-        <div class="field">
-          <label for="chart-file">Chart (maidata.txt)</label>
-          <input id="chart-file" type="file" accept=".txt,text/plain" />
-        </div>
-        <div class="field" style="margin-top: 10px;">
-          <label for="audio-file">Audio (optional)</label>
-          <input id="audio-file" type="file" accept="audio/*" />
-        </div>
+  <div class="side">
+    <div class="panel">
+      <h2>Chart source</h2>
+      <textarea id="src" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="load" class="primary">Load chart</button>
+        <label class="fld" id="diffwrap" style="display:none">Difficulty
+          <select id="diff"></select>
+        </label>
       </div>
+      <div class="err" id="err"></div>
+    </div>
+    <div class="panel">
+      <h2>Chart info</h2>
+      <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
+    </div>
+    <div class="panel">
+      <h2>Notes</h2>
+      <p style="font-size:12px;color:var(--dim);line-height:1.6;margin:0">
+        Paste a full <code>maidata.txt</code> (with <code>&amp;inote_x=</code> blocks) or just a raw note body.
+        Notes fly outward from the centre and land on the ring at their hit time — scrub or play to inspect.
+        Slide curves for <code>p q s z</code> are visual approximations; <code>- ^ &lt; &gt; v V w</code> are geometric.
+      </p>
+    </div>
+  </div>
+</div>
 
-      <div class="card">
-        <h2>Chart</h2>
-        <div class="field">
-          <label for="difficulty">Difficulty</label>
-          <select id="difficulty"></select>
-        </div>
-        <div id="meta" style="margin-top: 10px; display: flex; flex-direction: column; gap: 4px;"></div>
-      </div>
+<script>
+/* ============================ simai parser ============================ */
+function beatUnit(bpm, div){
+  if(div && div.abs!=null) return div.abs;
+  const d=(div&&div.val!=null)?div.val:div;
+  return 240/(bpm*d);
+}
+function parseDuration(content,bpm){
+  content=content.trim(); let delay=null,dur=0;
+  const ratio=(ds,cs)=>(240/(bpm*parseFloat(ds)))*parseFloat(cs);
+  if(content.includes('##')){
+    const [l,r]=content.split('##'); delay=parseFloat(l);
+    if(r.includes(':')){const[d,c]=r.split(':');dur=ratio(d,c);} else dur=parseFloat(r);
+  }else if(content.includes('#')){
+    const [l,r]=content.split('#');
+    if(r.includes(':')){const o=parseFloat(l);const[d,c]=r.split(':');dur=(240/(o*parseFloat(d)))*parseFloat(c);}
+    else if(l==='') dur=parseFloat(r); else dur=parseFloat(r);
+  }else if(content.includes(':')){const[d,c]=content.split(':');dur=ratio(d,c);}
+  else dur=parseFloat(content);
+  return {dur:isFinite(dur)?dur:0,delay};
+}
+const SHAPES=['-','^','<','>','v','V','p','q','s','z','w','pp','qq'];
+const isDig=ch=>ch>='1'&&ch<='8';
+function parseSimai(raw){
+  const s=(raw||'').replace(/\|\|.*?(\r?\n|$)/g,'\n');
+  const notes=[]; let i=0,time=0,bpm=120,div={val:4},first=0; const n=s.length;
+  function readBracket(o,c){let depth=0,out='';while(i<n){const ch=s[i++];if(ch===o){depth++;if(depth===1)continue;}if(ch===c){depth--;if(depth===0)break;}out+=ch;}return out;}
+  function readDur(){if(s[i]!=='[')return null;return parseDuration(readBracket('[',']'),bpm);}
+  function readShape(){const c=s[i];if(c==='p'&&s[i+1]==='p'){i+=2;return'pp';}if(c==='q'&&s[i+1]==='q'){i+=2;return'qq';}if(SHAPES.includes(c)){i++;return c;}return null;}
+  const isSlideStart=()=>SHAPES.includes(s[i])||(s[i]==='p'&&s[i+1]==='p')||(s[i]==='q'&&s[i+1]==='q');
+  function parseNote(t){
+    const c=s[i];
+    if('ABDE'.includes(c)||c==='C'){
+      const area=c;i++;let pos=0;
+      if(area==='C'){if(isDig(s[i]))i++;pos=0;} else {pos=parseInt(s[i],10);i++;}
+      let hold=false,fire=false,dur=null;
+      while(i<n){if(s[i]==='h'){hold=true;i++;}else if(s[i]==='f'){fire=true;i++;}else if(s[i]==='['){dur=readDur();}else break;}
+      if(hold)notes.push({type:'touchHold',time:t,area,pos,fire,dur:dur?dur.dur:beatUnit(bpm,div)});
+      else notes.push({type:'touch',time:t,area,pos,fire});
+      return;
+    }
+    if(!isDig(c)){i++;return;}
+    const from=parseInt(c,10);i++;
+    let brk=false,ex=false,noHead=false;
+    while('bx?!@'.includes(s[i])){if(s[i]==='b')brk=true;else if(s[i]==='x')ex=true;else noHead=true;i++;}
+    if(s[i]==='h'){i++;while('bx'.includes(s[i])){if(s[i]==='b')brk=true;else ex=true;i++;}let dur=readDur();notes.push({type:'hold',time:t,pos:from,break:brk,ex,dur:dur?dur.dur:beatUnit(bpm,div)});return;}
+    if(isSlideStart()){
+      const slides=[];
+      const parseChain=()=>{
+        const segs=[];let start=from;
+        while(true){const shape=readShape();if(!shape)break;let via=null,end;
+          if(shape==='V'){via=parseInt(s[i],10);i++;end=parseInt(s[i],10);i++;}
+          else{end=parseInt(s[i],10);i++;}
+          segs.push({shape,start,via,end});start=end;
+          if(!isSlideStart())break;}
+        let sbrk=brk,sex=ex;let dur=readDur();
+        while('bx'.includes(s[i])){if(s[i]==='b')sbrk=true;else sex=true;i++;}
+        if(!dur)dur=readDur();
+        return{segs,dur:dur?dur.dur:beatUnit(bpm,div),delay:dur?dur.delay:null,break:sbrk,ex:sex};
+      };
+      slides.push(parseChain());
+      while(s[i]==='*'){i++;slides.push(parseChain());}
+      for(const sl of slides)notes.push({type:'slide',time:t,from,segs:sl.segs,dur:sl.dur,delay:sl.delay,break:sl.break,ex:sl.ex,noHead});
+      if(!noHead)notes.push({type:'tap',time:t,pos:from,break:brk,ex,slideHead:true});
+      return;
+    }
+    notes.push({type:'tap',time:t,pos:from,break:brk,ex});
+  }
+  while(i<n){
+    const c=s[i];
+    if(c===' '||c==='\n'||c==='\r'||c==='\t'){i++;continue;}
+    if(c==='('){const b=readBracket('(',')');const v=parseFloat(b);if(isFinite(v))bpm=v;continue;}
+    if(c==='{'){const b=readBracket('{','}').trim();if(b[0]==='#')div={abs:parseFloat(b.slice(1))};else div={val:parseFloat(b)};continue;}
+    if(c===','){time+=beatUnit(bpm,div);i++;continue;}
+    if(c==='/'||c==='`'){i++;continue;}
+    if(c==='E'){i++;continue;}
+    parseNote(time);
+  }
+  let duration=0;for(const nt of notes){const e=nt.time+(nt.dur||0);if(e>duration)duration=e;}
+  for(const nt of notes)nt.time+=first;
+  return{bpm,first,notes,duration:duration+first+1.5};
+}
+function extractCharts(text){
+  const meta={},charts={};
+  const re=/&([a-zA-Z0-9_]+)\s*=\s*([\s\S]*?)(?=\n&|\s*$)/g;let m;
+  while((m=re.exec(text))!==null){
+    const key=m[1].toLowerCase(),val=m[2];
+    const im=key.match(/^inote_(\d+)$/);
+    if(im)charts[parseInt(im[1],10)]=val; else meta[key]=val.trim();
+  }
+  return{meta,charts};
+}
 
-      <div class="card">
-        <h2>Playback</h2>
-        <div class="transport">
-          <button id="play" class="primary" style="flex: 0 0 auto;">▶ Play</button>
-          <input id="seek" type="range" min="0" max="1000" value="0" />
-        </div>
-        <div class="time" id="time" style="text-align: left; margin-top: 6px;">0:00.00 / 0:00.00</div>
-        <div class="field" style="margin-top: 10px;">
-          <label for="speed">Note approach: <span id="speed-val">0.85</span>s</label>
-          <input id="speed" type="range" min="0.3" max="2" step="0.05" value="0.85" />
-        </div>
-      </div>
+/* ============================ geometry ============================ */
+const cv=document.getElementById('ring'),ctx=cv.getContext('2d');
+const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
+const RING=W*0.40;        // button ring radius
+const NOTE_R=W*0.022;
+function posAngle(p){return (22.5+(p-1)*45)*Math.PI/180;} // clockwise from top
+function ptOnRing(p,r){const a=posAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
+function gapAngle(p){return ((p-1)*45)*Math.PI/180;} // between-button slots for D/E
+function ptGap(p,r){const a=gapAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
+const wrap8=p=>((p-1+8)%8)+1;
 
-      <div class="card">
-        <h2>Parser warnings</h2>
-        <div id="warnings">—</div>
-      </div>
-    </aside>
+function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
+function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
 
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+function segPoints(seg){
+  const A=ptOnRing(seg.start,RING), B=ptOnRing(seg.end,RING);
+  const aA=posAngle(seg.start), aB=posAngle(seg.end);
+  switch(seg.shape){
+    case '-': return [A,B];
+    case 'v': return [A,{x:CX,y:CY},B];
+    case 'V':{const Vp=ptOnRing(seg.via,RING);return [A,Vp,B];}
+    case '^':case '<':case '>':{
+      let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
+      if(seg.shape==='<'&&d>0)d-=2*Math.PI;
+      if(seg.shape==='>'&&d<0)d+=2*Math.PI;
+      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RING,y:CY-Math.cos(a)*RING};},24);
+    }
+    case 'p':case 'q':case 'pp':case 'qq':{
+      // approximate teardrop loop with a bowed bezier; p/q opposite bow
+      const dir=(seg.shape[0]==='p')?1:-1;
+      const big=seg.shape.length===2?1.7:1.0;
+      const mid=lerp(A,B,0.5);
+      const nx=-(B.y-A.y), ny=(B.x-A.x); const nl=Math.hypot(nx,ny)||1;
+      const bow=RING*0.55*big*dir;
+      const ctrl={x:mid.x+nx/nl*bow, y:mid.y+ny/nl*bow};
+      return sample(u=>{const m=1-u;return{x:m*m*A.x+2*m*u*ctrl.x+u*u*B.x,y:m*m*A.y+2*m*u*ctrl.y+u*u*B.y};},24);
+    }
+    case 's':case 'z':{
+      const dir=seg.shape==='s'?1:-1;
+      const c1=lerp(A,{x:CX,y:CY},0.5), c2=lerp({x:CX,y:CY},B,0.5);
+      c1.x+=dir*RING*0.22; c2.x-=dir*RING*0.22;
+      return sample(u=>{const m=1-u;
+        return{x:m*m*m*A.x+3*m*m*u*c1.x+3*m*u*u*c2.x+u*u*u*B.x,
+               y:m*m*m*A.y+3*m*m*u*c1.y+3*m*u*u*c2.y+u*u*u*B.y};},28);
+    }
+    default: return [A,B];
+  }
+}
+function slidePolylines(note){
+  // returns {main:[pts], extra:[[pts],...]} ; wifi adds two side fans
+  let pts=[];
+  for(const seg of note.segs){const sp=segPoints(seg);if(pts.length)sp.shift();pts=pts.concat(sp);}
+  const out={main:pts,extra:[]};
+  const last=note.segs[note.segs.length-1];
+  if(last && last.shape==='w'){
+    const start=note.from;
+    out.extra.push(segPoints({shape:'-',start,end:wrap8(last.end-1)}));
+    out.extra.push(segPoints({shape:'-',start,end:wrap8(last.end+1)}));
+  }
+  return out;
+}
+function polyLen(pts){let L=0;for(let k=1;k<pts.length;k++)L+=Math.hypot(pts[k].x-pts[k-1].x,pts[k].y-pts[k-1].y);return L;}
+function alongPoly(pts,u){
+  const total=polyLen(pts); if(total===0)return pts[0];
+  let target=u*total,acc=0;
+  for(let k=1;k<pts.length;k++){const d=Math.hypot(pts[k].x-pts[k-1].x,pts[k].y-pts[k-1].y);
+    if(acc+d>=target){const f=(target-acc)/(d||1);return lerp(pts[k-1],pts[k],f);}acc+=d;}
+  return pts[pts.length-1];
+}
+function touchPoint(note){
+  const area=note.area;
+  if(area==='C')return{x:CX,y:CY};
+  if(area==='A')return ptOnRing(note.pos,RING);
+  if(area==='B')return ptOnRing(note.pos,RING*0.52);
+  if(area==='D')return ptGap(note.pos,RING);
+  if(area==='E')return ptGap(note.pos,RING*0.52);
+  return{x:CX,y:CY};
+}
+
+/* ============================ rendering ============================ */
+const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#19e6c8',brk:'#ffb22e'};
+function drawBoard(){
+  ctx.clearRect(0,0,W,H);
+  // ring + sensor guides
+  ctx.strokeStyle='rgba(255,255,255,.07)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(CX,CY,RING,0,7);ctx.stroke();
+  ctx.beginPath();ctx.arc(CX,CY,RING*0.52,0,7);ctx.stroke();
+  // radial guides
+  for(let p=1;p<=8;p++){const g=ptGap(p,RING);
+    ctx.strokeStyle='rgba(255,255,255,.05)';ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(g.x,g.y);ctx.stroke();}
+  // buttons
+  for(let p=1;p<=8;p++){const b=ptOnRing(p,RING);
+    ctx.fillStyle='#222a40';ctx.strokeStyle='#39415f';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(b.x,b.y,W*0.028,0,7);ctx.fill();ctx.stroke();
+    ctx.fillStyle='#8b93ad';ctx.font=`600 ${W*0.026}px ui-sans-serif`;
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(p,b.x,b.y);}
+}
+function noteColor(nt){return nt.break?COL.brk:(nt.type==='slide'?COL.slide:nt.type==='hold'?COL.hold:nt.type==='touch'||nt.type==='touchHold'?COL.touch:COL.tap);}
+
+function render(chart,t,lead){
+  drawBoard();
+  if(!chart)return;
+  for(const nt of chart.notes){
+    const T=nt.time;
+    if(nt.type==='tap'){
+      if(t<T-lead||t>T+0.13)continue;
+      const u=Math.min(1,(t-(T-lead))/lead); const b=ptOnRing(nt.pos,RING*u);
+      drawTap(b,noteColor(nt),nt.break,nt.ex,u);
+    }else if(nt.type==='hold'){
+      const end=T+nt.dur;
+      if(t<T-lead||t>end+0.13)continue;
+      const a=posAngle(nt.pos);
+      if(t<T){const u=Math.min(1,(t-(T-lead))/lead);drawTap(ptOnRing(nt.pos,RING*u),COL.hold,nt.break,nt.ex,u);}
+      // body bar while held
+      if(t>=T&&t<=end){
+        const r0=RING*0.30,r1=RING;
+        ctx.strokeStyle=nt.break?COL.brk:COL.hold;ctx.lineWidth=W*0.03;ctx.lineCap='round';
+        ctx.globalAlpha=.85;
+        ctx.beginPath();ctx.moveTo(CX+Math.sin(a)*r0,CY-Math.cos(a)*r0);ctx.lineTo(CX+Math.sin(a)*r1,CY-Math.cos(a)*r1);ctx.stroke();
+        ctx.globalAlpha=1;
+        drawTap(ptOnRing(nt.pos,RING),nt.break?COL.brk:COL.hold,nt.break,nt.ex,1);
+      }
+    }else if(nt.type==='slide'){
+      const guideStart=T-lead*0.7, end=T+(nt.dur||0.3);
+      if(t<guideStart||t>end+0.1)continue;
+      const polys=slidePolylines(nt);
+      const col=nt.break?COL.brk:COL.slide;
+      // guide
+      const passed=t>end-0.001;
+      ctx.globalAlpha=passed?.18:(t<T?0.30:0.5);
+      ctx.strokeStyle=col;ctx.lineWidth=W*0.012;ctx.lineCap='round';ctx.lineJoin='round';
+      for(const line of [polys.main,...polys.extra]){
+        ctx.beginPath();ctx.moveTo(line[0].x,line[0].y);for(let k=1;k<line.length;k++)ctx.lineTo(line[k].x,line[k].y);ctx.stroke();
+      }
+      ctx.globalAlpha=1;
+      // travelling star
+      if(t>=T&&t<=end){const u=(t-T)/(nt.dur||0.3);const sp=alongPoly(polys.main,Math.min(1,u));drawStar(sp,col);}
+    }else if(nt.type==='touch'||nt.type==='touchHold'){
+      const end=T+(nt.dur||0);
+      if(t<T-lead||t>end+0.13)continue;
+      const p=touchPoint(nt);const u=Math.min(1,(t-(T-lead))/lead);
+      drawTouch(p,COL.touch,u,nt.fire);
+      if(nt.type==='touchHold'&&t>=T&&t<=end){drawTouch(p,COL.touch,1,nt.fire);}
+    }
+  }
+}
+function drawTap(p,col,brk,ex,u){
+  ctx.save();
+  ctx.shadowColor=col;ctx.shadowBlur=14;
+  ctx.fillStyle=col;
+  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R,0,7);ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.lineWidth=3;ctx.strokeStyle=ex?'#ffffff':(brk?'#fff3d6':'rgba(255,255,255,.6)');
+  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R+(brk?4:2),0,7);ctx.stroke();
+  if(brk){ // spikes
+    ctx.strokeStyle='#fff3d6';ctx.lineWidth=2;
+    for(let k=0;k<8;k++){const a=k*Math.PI/4;ctx.beginPath();
+      ctx.moveTo(p.x+Math.cos(a)*(NOTE_R+5),p.y+Math.sin(a)*(NOTE_R+5));
+      ctx.lineTo(p.x+Math.cos(a)*(NOTE_R+10),p.y+Math.sin(a)*(NOTE_R+10));ctx.stroke();}
+  }
+  ctx.restore();
+}
+function drawStar(p,col){
+  ctx.save();ctx.translate(p.x,p.y);ctx.shadowColor=col;ctx.shadowBlur=16;ctx.fillStyle=col;
+  ctx.beginPath();const R=NOTE_R*1.1,r=R*0.45;
+  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
+    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+  ctx.closePath();ctx.fill();ctx.restore();
+}
+function drawTouch(p,col,u,fire){
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(Math.PI/4);
+  const s=NOTE_R*1.2*(0.5+0.5*u);
+  ctx.strokeStyle=col;ctx.lineWidth=3;ctx.shadowColor=col;ctx.shadowBlur=fire?18:8;
+  ctx.strokeRect(-s,-s,s*2,s*2);
+  ctx.globalAlpha=0.25;ctx.fillStyle=col;ctx.fillRect(-s,-s,s*2,s*2);
+  ctx.restore();
+}
+
+/* ============================ mini timeline ============================ */
+const mini=document.getElementById('mini'),mctx=mini.getContext('2d');
+function drawMini(chart,t){
+  mctx.clearRect(0,0,mini.width,mini.height);
+  if(!chart||!chart.duration)return;
+  const dur=chart.duration;
+  for(const nt of chart.notes){
+    const x=(nt.time/dur)*mini.width;
+    mctx.fillStyle=noteColor(nt);mctx.globalAlpha=.7;
+    mctx.fillRect(x,4,nt.type==='slide'?2:2,mini.height-8);
+  }
+  mctx.globalAlpha=1;
+  const px=(t/dur)*mini.width;
+  mctx.fillStyle='#fff';mctx.fillRect(px-1,0,2,mini.height);
+}
+
+/* ============================ app state ============================ */
+let chart=null,playing=false,curT=0,lastTs=0,speed=1,lead=0.85;
+const $=id=>document.getElementById(id);
+
+function loadFromSource(){
+  const text=$('src').value;
+  $('err').textContent='';
+  try{
+    let body=text, meta={};
+    if(/&inote_\d+/.test(text)){
+      const ex=extractCharts(text); meta=ex.meta;
+      const keys=Object.keys(ex.charts).map(Number).sort((a,b)=>a-b);
+      if(!keys.length)throw new Error('No &inote_x blocks found.');
+      const sel=$('diff'); sel.innerHTML='';
+      const names={1:'Easy',2:'Basic',3:'Advanced',4:'Expert',5:'Master',6:'Re:Master',7:'Original'};
+      for(const k of keys){const o=document.createElement('option');o.value=k;
+        o.textContent=`${names[k]||('inote_'+k)}${meta['lv_'+k]?' · Lv '+meta['lv_'+k]:''}`;sel.appendChild(o);}
+      $('diffwrap').style.display='';
+      const chosen=parseInt(sel.value,10);
+      body=ex.charts[chosen];
+      if(meta.first)body=body; // first handled below
+      chart=parseSimai(body);
+      if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}
+      sel.onchange=()=>{const k=parseInt(sel.value,10);let b=ex.charts[k];chart=parseSimai(b);
+        if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}
+        resetTransport();showInfo(meta,k);};
+      showInfo(meta,chosen);
+    }else{
+      $('diffwrap').style.display='none';
+      chart=parseSimai(body);
+      showInfo({},null);
+    }
+    resetTransport();
+  }catch(e){$('err').textContent='Parse error: '+e.message;}
+}
+function showInfo(meta,k){
+  const counts={};for(const nt of chart.notes)counts[nt.type]=(counts[nt.type]||0)+1;
+  const total=chart.notes.filter(n=>!(n.type==='tap'&&n.slideHead)).length;
+  $('info').innerHTML=
+    (meta.title?`<span><b>${esc(meta.title)}</b></span>`:'')+
+    (meta.artist?`<span>${esc(meta.artist)}</span>`:'')+
+    `<span>BPM <b>${chart.bpm}</b></span>`+
+    `<span>Length <b>${chart.duration.toFixed(1)}s</b></span>`+
+    `<span>Notes <b>${total}</b></span>`+
+    `<span style="color:var(--dim)">${counts.tap||0} tap · ${counts.hold||0} hold · ${counts.slide||0} slide · ${(counts.touch||0)+(counts.touchHold||0)} touch</span>`;
+}
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
+  $('seek').max=chart.duration;$('seek').value=0;updateLabel();frame(true);}
+function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
+
+function frame(force){
+  render(chart,curT,lead);drawMini(chart,curT);
+  if(!force){$('seek').value=curT;updateLabel();}
+}
+function loop(ts){
+  if(playing){
+    if(!lastTs)lastTs=ts;
+    const dt=(ts-lastTs)/1000*speed;lastTs=ts;curT+=dt;
+    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';}
+    frame(false);
+  }else lastTs=0;
+  requestAnimationFrame(loop);
+}
+
+/* ============================ wiring ============================ */
+$('play').onclick=()=>{if(!chart)return;playing=!playing;lastTs=0;
+  if(curT>=chart.duration)curT=0;$('play').textContent=playing?'⏸ Pause':'▶ Play';};
+$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;$('play').textContent='▶ Play';frame(false);};
+$('seek').oninput=e=>{curT=parseFloat(e.target.value);frame(true);drawMini(chart,curT);updateLabel();};
+$('speed').onchange=e=>speed=parseFloat(e.target.value);
+$('lead').oninput=e=>{lead=parseFloat(e.target.value);$('leadval').textContent=lead.toFixed(2)+'s';frame(true);};
+$('load').onclick=loadFromSource;
+mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
+  curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
+
+const SAMPLE=`&title=Sample Pattern
+&artist=viewer demo
+&first=0
+&lv_5=10
+&inote_5=
+(160){8}
+1,2,3,4,5,6,7,8,
+{4}
+1h[4:2],5h[4:2],
+2-6[4:1],4-8[4:1],
+{8}
+1,3,5,7,
+3/7,4/8,
+{4}
+1V73[4:1],
+8w4[4:1],
+A1,B5,C,E3,
+Ch[4:2],
+{8}
+1b,3,5b,7,
+2-4[8:1]-6[8:1]-8[8:1],
+1,2,3,4,5,6,7,8,
+E`;
+$('src').value=SAMPLE;
+loadFromSource();
+requestAnimationFrame(loop);
+</script>
+</body>
 </html>
