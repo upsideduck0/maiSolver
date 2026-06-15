@@ -310,12 +310,12 @@ function tangentAt(pts,u){const a=alongPoly(pts,Math.max(0,u-0.005)),b=alongPoly
 // real maimai sensor type, so it is not drawn.
 const R_OUTER = RING*1.15;        // outermost ring
 const R_C_SZ  = SENSOR_C;         // central octagon size
-const R_B     = RING*0.43;        // centre of B octagons
-const B_SZ    = RING*0.175;       // B octagon vertex distance
-const R_E     = RING*0.63;        // centre of E squares
-const E_SZ    = RING*0.17;        // E square half-diagonal
-const R_A_IN  = RING*0.67;        // inner edge of A rectangles
-const A_HALFW = RING*0.14;        // half tangential width of an A rectangle
+const R_B     = RING*0.48;        // centre of B octagons
+const B_SZ    = RING*0.197;       // B octagon vertex distance
+const R_E     = RING*0.7;         // centre of E squares
+const E_SZ    = RING*0.18;        // E square half-diagonal
+const R_A_IN  = RING*0.72;        // inner edge of A rectangles
+const A_HALFW = RING*0.23;        // half tangential width of an A rectangle
 
 function touchPoint(note){
   const area=note.area;
@@ -352,43 +352,98 @@ function strokeRectSensor(g,a,rIn,rOut,halfW){
   ]);
 }
 
-/* ============================ sensor map (background) ============================ */
+/* ============================ sensors & input ============================ */
 const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#19e6c8',brk:'#ff7a1e',each:'#ffd23b'};
-const boardCv=document.createElement('canvas');boardCv.width=W;boardCv.height=H;
-const bctx=boardCv.getContext('2d');
 let sensorImg=null;
-
 // Drop a data-URL / path here (or use the file picker) to render your own PNG.
 const SENSOR_IMG_SRC="";
 
-function drawSensorMap(g){
-  if(sensorImg){
-    g.save();
-    g.beginPath();g.arc(CX,CY,R_OUTER,0,7);g.clip();
-    g.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);
-    g.restore();
-    g.strokeStyle='rgba(150,170,210,.25)';g.lineWidth=2;
-    g.beginPath();g.arc(CX,CY,R_OUTER,0,7);g.stroke();
-    return;
-  }
-  // maimai sensor layout: A (outer rectangles) / B (octagons) / C (centre octagon)
-  // / E (corner squares). D is intentionally omitted (not a real sensor type).
-  g.save();
+// ---- polygon builders (return arrays of {x,y}) ----
+function rectPoly(a,rIn,rOut,halfW){
+  const rad={x:Math.sin(a),y:-Math.cos(a)}, tan={x:Math.cos(a),y:Math.sin(a)};
+  const ci={x:CX+rad.x*rIn,y:CY+rad.y*rIn}, co={x:CX+rad.x*rOut,y:CY+rad.y*rOut};
+  return [{x:ci.x-tan.x*halfW,y:ci.y-tan.y*halfW},{x:ci.x+tan.x*halfW,y:ci.y+tan.y*halfW},
+          {x:co.x+tan.x*halfW,y:co.y+tan.y*halfW},{x:co.x-tan.x*halfW,y:co.y-tan.y*halfW}];
+}
+function octPoly(c,size){const o=[];for(let k=0;k<8;k++){const a=Math.PI/8+k*Math.PI/4;
+  o.push({x:c.x+Math.sin(a)*size,y:c.y-Math.cos(a)*size});}return o;}
+function sqPoly(c,size,radial){const o=[];for(let k=0;k<4;k++){const a=radial+k*Math.PI/2;
+  o.push({x:c.x+Math.sin(a)*size,y:c.y-Math.cos(a)*size});}return o;}
+// D gap: the quad between two adjacent A rectangles, from R_A_IN out to the ring.
+function dGapPoly(low,high){
+  const aL=posAngle(low),aH=posAngle(high);
+  const radL={x:Math.sin(aL),y:-Math.cos(aL)}, tanL={x:Math.cos(aL),y:Math.sin(aL)};
+  const radH={x:Math.sin(aH),y:-Math.cos(aH)}, tanH={x:Math.cos(aH),y:Math.sin(aH)};
+  return [
+    {x:CX+radL.x*R_A_IN+tanL.x*A_HALFW, y:CY+radL.y*R_A_IN+tanL.y*A_HALFW},
+    {x:CX+radL.x*R_OUTER+tanL.x*A_HALFW, y:CY+radL.y*R_OUTER+tanL.y*A_HALFW},
+    {x:CX+radH.x*R_OUTER-tanH.x*A_HALFW, y:CY+radH.y*R_OUTER-tanH.y*A_HALFW},
+    {x:CX+radH.x*R_A_IN-tanH.x*A_HALFW, y:CY+radH.y*R_A_IN-tanH.y*A_HALFW},
+  ];
+}
+
+// ---- the sensor set: A1-8, B1-8, E1-8, C, D1-8 ----
+const SENSORS=[];
+function buildSensors(){
+  SENSORS.length=0;
+  for(let p=1;p<=8;p++) SENSORS.push({id:'A'+p,kind:'A',poly:rectPoly(posAngle(p),R_A_IN,R_OUTER,A_HALFW)});
+  for(let p=1;p<=8;p++) SENSORS.push({id:'B'+p,kind:'B',poly:octPoly(polarPt(posAngle(p),R_B),B_SZ)});
+  for(let p=1;p<=8;p++){const a=gapAngle(p);SENSORS.push({id:'E'+p,kind:'E',poly:sqPoly(polarPt(a,R_E),E_SZ,a)});}
+  SENSORS.push({id:'C',kind:'C',poly:octPoly({x:CX,y:CY},R_C_SZ),inputR:RING*0.3}); // input = circle, not the shape
+  for(let g=1;g<=8;g++) SENSORS.push({id:'D'+g,kind:'D',poly:dGapPoly(wrap8(g-1),g)});
+}
+
+// ---- hit testing ----
+function pointInPoly(px,py,poly){let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>py)!=(yj>py))&&(px<(xj-xi)*(py-yi)/(yj-yi)+xi))inside=!inside;}
+  return inside;}
+function distToSeg(px,py,a,b){const dx=b.x-a.x,dy=b.y-a.y,l2=dx*dx+dy*dy;
+  let t=l2?((px-a.x)*dx+(py-a.y)*dy)/l2:0;t=t<0?0:t>1?1:t;
+  return Math.hypot(px-(a.x+t*dx),py-(a.y+t*dy));}
+function circlePolyHit(cx,cy,r,poly){if(pointInPoly(cx,cy,poly))return true;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++)if(distToSeg(cx,cy,poly[j],poly[i])<=r)return true;
+  return false;}
+// Does an input circle (cx,cy,r) activate sensor s? C uses a circular input area.
+function sensorHit(s,cx,cy,r){
+  if(s.kind==='C')return Math.hypot(cx-CX,cy-CY)<=s.inputR+r;
+  return circlePolyHit(cx,cy,r,s.poly);
+}
+
+// ---- input state ----
+// activeSensors holds the ids currently lit. triggerInput() is the reusable
+// entry point the hand simulation will call later; the mouse just feeds it.
+let activeSensors=new Set();
+let pointerInput=null;              // {x,y,r} drawn while the mouse is held
+const INPUT_R=RING*0.06;           // radius of one input "finger"
+function triggerInput(inputs){
+  const set=new Set();
+  for(const s of SENSORS) for(const inp of inputs)
+    if(sensorHit(s,inp.x,inp.y,inp.r)){set.add(s.id);break;}
+  activeSensors=set;
+  return set;
+}
+function clearInput(){activeSensors=new Set();pointerInput=null;}
+
+// ---- drawing ----
+const LIT_FILL='rgba(150,162,196,0.92)';   // a sensor lit up by input
+function fillPolyArr(poly){ctx.beginPath();ctx.moveTo(poly[0].x,poly[0].y);
+  for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);ctx.closePath();ctx.fill();}
+function strokePolyArr(poly){ctx.beginPath();ctx.moveTo(poly[0].x,poly[0].y);
+  for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);ctx.closePath();ctx.stroke();}
+function drawSensorOutlines(){
   const senCol='rgba(225,232,250,0.55)', senBright='rgba(235,240,252,0.80)';
-  g.lineJoin='miter';g.lineCap='butt';
-  // outer ring
-  g.strokeStyle=senBright;g.lineWidth=Math.max(1.6,W*0.0048);
-  g.beginPath();g.arc(CX,CY,R_OUTER,0,Math.PI*2);g.stroke();
-  g.strokeStyle=senCol;g.lineWidth=Math.max(1.4,W*0.0035);
-  // A — 8 radial rectangles
-  for(let p=1;p<=8;p++) strokeRectSensor(g,posAngle(p),R_A_IN,R_OUTER,A_HALFW);
-  // B — 8 flat-top octagons at the button positions
-  for(let p=1;p<=8;p++) strokeOctagonFlat(g,polarPt(posAngle(p),R_B),B_SZ);
-  // E — 8 corner squares between B octagons
-  for(let p=1;p<=8;p++){const a=gapAngle(p);strokeRadialSquare(g,polarPt(a,R_E),E_SZ,a);}
-  // C — central flat-top octagon
-  strokeOctagonFlat(g,{x:CX,y:CY},R_C_SZ);
-  g.restore();
+  ctx.lineJoin='miter';ctx.lineCap='butt';
+  ctx.strokeStyle=senBright;ctx.lineWidth=Math.max(1.6,W*0.0048);
+  ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,Math.PI*2);ctx.stroke();
+  ctx.strokeStyle=senCol;ctx.lineWidth=Math.max(1.4,W*0.0035);
+  for(const s of SENSORS){if(s.kind==='D')continue; strokePolyArr(s.poly);} // D has no resting shape
+}
+function drawLitSensors(){
+  ctx.save();ctx.shadowColor='rgba(180,200,255,0.7)';ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;
+  for(const s of SENSORS) if(activeSensors.has(s.id)) fillPolyArr(s.poly);
+  ctx.restore();
 }
 function drawButtons(g){
   for(let p=1;p<=8;p++){const b=ptOnRing(p,RING);
@@ -397,8 +452,8 @@ function drawButtons(g){
     g.fillStyle='#aab3cf';g.font=`600 ${W*0.024}px ui-sans-serif`;
     g.textAlign='center';g.textBaseline='middle';g.fillText(p,b.x,b.y);}
 }
-function buildBoard(){bctx.clearRect(0,0,W,H);drawSensorMap(bctx);drawButtons(bctx);}
-function setSensorImage(src){const im=new Image();im.onload=()=>{sensorImg=im;buildBoard();frame(true);};im.src=src;}
+function buildBoard(){buildSensors();}
+function setSensorImage(src){const im=new Image();im.onload=()=>{sensorImg=im;frame(true);};im.src=src;}
 
 /* ============================ note rendering ============================ */
 function noteColor(nt){
@@ -512,7 +567,21 @@ function drawTouchHold(p,u,active,holdU,fire){
 }
 
 /* ============================ frame composition ============================ */
-function drawBoard(){ctx.clearRect(0,0,W,H);ctx.drawImage(boardCv,0,0);}
+function drawBoard(){
+  ctx.clearRect(0,0,W,H);
+  if(sensorImg){
+    ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
+    ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
+    ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();
+  }
+  drawLitSensors();
+  if(!sensorImg) drawSensorOutlines();
+  drawButtons(ctx);
+  if(pointerInput){
+    ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();ctx.restore();
+  }
+}
 function render(chart,t,lead){
   drawBoard();
   if(!chart)return;
@@ -647,6 +716,17 @@ $('sensorfile').onchange=e=>{const f=e.target.files[0];if(f)setSensorImage(URL.c
 $('sensorclear').onclick=()=>{sensorImg=null;buildBoard();frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
+
+// --- sensor input via mouse (stand-in for the future hand simulation) ---
+function canvasPos(e){const r=cv.getBoundingClientRect();
+  return{x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)};}
+let mouseHeld=false;
+cv.addEventListener('pointerdown',e=>{mouseHeld=true;
+  if(cv.setPointerCapture)cv.setPointerCapture(e.pointerId);
+  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};triggerInput([pointerInput]);frame(true);});
+cv.addEventListener('pointermove',e=>{if(!mouseHeld)return;
+  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};triggerInput([pointerInput]);frame(true);});
+window.addEventListener('pointerup',()=>{mouseHeld=false;clearInput();frame(true);});
 
 const SAMPLE=`&title=Slide Showcase
 &artist=maiSolver
