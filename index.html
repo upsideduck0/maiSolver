@@ -8,7 +8,7 @@
   :root{
     --bg:#0c0e16; --panel:#151826; --panel2:#1d2133; --line:#2a2f45;
     --txt:#e8ecf6; --dim:#8b93ad; --accent:#ff3b6b; --slide:#2ec4ff;
-    --touch:#ffcf3a; --brk:#ff7a1e; --each:#ffd23b; --hold:#ff5c8a;
+    --touch:#2ec4ff; --brk:#ff7a1e; --each:#ffd23b; --hold:#ff5c8a;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
@@ -191,7 +191,7 @@ function parseSimai(raw){
       };
       slides.push(parseChain());
       while(s[i]==='*'){i++;slides.push(parseChain());}
-      for(const sl of slides)notes.push({type:'slide',time:t,from,segs:sl.segs,dur:sl.dur,delay:sl.delay,break:sl.break,ex:sl.ex,noHead});
+      for(const sl of slides)notes.push({type:'slide',time:t,from,segs:sl.segs,dur:sl.dur,delay:sl.delay,delaySec:60/bpm,break:sl.break,ex:sl.ex,noHead});
       if(!noHead)notes.push({type:'tap',time:t,pos:from,break:brk,ex,slideHead:true});
       return;
     }
@@ -208,7 +208,7 @@ function parseSimai(raw){
     parseNote(time);
   }
   markEach(notes);
-  let duration=0;for(const nt of notes){const e=nt.time+(nt.dur||0);if(e>duration)duration=e;}
+  let duration=time;for(const nt of notes){const e=nt.time+(nt.delaySec||0)+(nt.dur||0);if(e>duration)duration=e;}
   for(const nt of notes)nt.time+=first;
   return{bpm,first,notes,duration:duration+first+1.5};
 }
@@ -243,10 +243,12 @@ const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
 const RING=W*0.40;          // outer button-ring radius
 const SENSOR_C=RING*0.20;   // centre (C) octagon size; touch notes match this size
 const INNER=0.20;           // notes spawn here (fraction of RING), never the dead centre
-const NOTE_R0=W*0.024;       // base note radius
-let NOTE_R=NOTE_R0;          // scaled live by Settings → Note size
-const TOUCH_R0=SENSOR_C*0.8; // base touch size (a bit smaller than the C sensor)
-let TOUCH_R=TOUCH_R0;        // scaled live by Settings → Touch size
+const NOTE_R0=W*0.024*2;          // base note radius (2x default)
+let NOTE_R=NOTE_R0;               // scaled live by Settings → Note size
+const TOUCH_R0=SENSOR_C*0.8*1.15; // base touch size (1.15x default)
+let TOUCH_R=TOUCH_R0;             // scaled live by Settings → Touch size
+const POP_T=0.13;                 // entrance "grow-in" duration (seconds)
+function popScale(t,T,lead){const k=(t-(T-lead))/POP_T;return k>=1?1:k<=0?0:k*k*(3-2*k);}
 const clamp01=u=>u<0?0:u>1?1:u;
 function posAngle(p){return (22.5+(p-1)*45)*Math.PI/180;} // clockwise from top
 function ptOnRing(p,r){const a=posAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
@@ -366,7 +368,7 @@ function strokeRectSensor(g,a,rIn,rOut,halfW){
 }
 
 /* ============================ sensors & input ============================ */
-const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#ffcf3a',brk:'#ff7a1e',each:'#ffd23b'};
+const COL={tap:'#ff3b6b',hold:'#ff5c8a',slide:'#2ec4ff',touch:'#2ec4ff',brk:'#ff7a1e',each:'#ffd23b'};
 let sensorImg=null;
 // Drop a data-URL / path here (or use the file picker) to render your own PNG.
 const SENSOR_IMG_SRC="";
@@ -495,28 +497,29 @@ function diamondPath(s){ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s,0);ctx.lin
 function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4+Math.PI/8;const x=Math.cos(a)*s,y=Math.sin(a)*s;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.closePath();}
 
 // Tap/slide-head: a ring (donut) that is blank in the middle so the sensor map shows through.
-function drawTap(p,col,brk,ex){
+function drawTap(p,col,brk,ex,sc){
+  const r=NOTE_R*(sc==null?1:sc);
   ctx.save();
   ctx.shadowColor=col;ctx.shadowBlur=12;
   ctx.beginPath();
-  ctx.arc(p.x,p.y,NOTE_R,0,7);
-  ctx.arc(p.x,p.y,NOTE_R*0.52,0,7,true);   // hole
+  ctx.arc(p.x,p.y,r,0,7);
+  ctx.arc(p.x,p.y,r*0.52,0,7,true);   // hole
   ctx.fillStyle=col;ctx.fill('evenodd');
   ctx.shadowBlur=0;
   ctx.lineWidth=ex?3.5:2.4;ctx.strokeStyle=ex?'#ffffff':'rgba(255,255,255,.85)';
-  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R,0,7);ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,r,0,7);ctx.stroke();
   ctx.lineWidth=1.6;ctx.strokeStyle='rgba(255,255,255,.6)';
-  ctx.beginPath();ctx.arc(p.x,p.y,NOTE_R*0.52,0,7);ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,7);ctx.stroke();
   if(brk){
     ctx.strokeStyle='#ffe2b0';ctx.lineWidth=2;
     for(let k=0;k<8;k++){const a=k*Math.PI/4;ctx.beginPath();
-      ctx.moveTo(p.x+Math.cos(a)*(NOTE_R+5),p.y+Math.sin(a)*(NOTE_R+5));
-      ctx.lineTo(p.x+Math.cos(a)*(NOTE_R+11),p.y+Math.sin(a)*(NOTE_R+11));ctx.stroke();}
+      ctx.moveTo(p.x+Math.cos(a)*(r+5),p.y+Math.sin(a)*(r+5));
+      ctx.lineTo(p.x+Math.cos(a)*(r+11),p.y+Math.sin(a)*(r+11));ctx.stroke();}
   }
   ctx.restore();
 }
 // Hold: a capsule drawn as two parallel rails (blank middle) between tail and head radii.
-function drawHold(angle,rTail,rHead,col,brk,ex){
+function drawHold(angle,rTail,rHead,col,brk,ex,sc){
   const rad={x:Math.sin(angle),y:-Math.cos(angle)};
   const per={x:Math.cos(angle),y:Math.sin(angle)};
   const off=NOTE_R*0.85;
@@ -535,12 +538,12 @@ function drawHold(angle,rTail,rHead,col,brk,ex){
   ctx.lineWidth=NOTE_R*0.42;
   ctx.beginPath();ctx.arc(t.x,t.y,off,angle+Math.PI/2,angle+3*Math.PI/2);ctx.stroke();
   ctx.shadowBlur=0;ctx.restore();
-  drawTap(h,col,brk,ex);
+  drawTap(h,col,brk,ex,sc);
 }
-function drawStar(p,col,rot){
+function drawStar(p,col,rot,sc){
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
   ctx.shadowColor=col;ctx.shadowBlur=16;ctx.fillStyle=col;
-  ctx.beginPath();const R=NOTE_R*1.2,r=R*0.46;
+  ctx.beginPath();const R=NOTE_R*1.2*(sc==null?1:sc),r=R*0.46;
   for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
     const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
   ctx.closePath();ctx.fill();
@@ -548,41 +551,54 @@ function drawStar(p,col,rot){
   ctx.restore();
 }
 function drawChevron(p,ang,col,alpha){
-  const s=NOTE_R*0.85;
+  const s=W*0.02;
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
-  ctx.globalAlpha=alpha;ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.4;
+  ctx.globalAlpha=alpha;ctx.strokeStyle=col;ctx.lineWidth=W*0.009;
   ctx.lineCap='round';ctx.lineJoin='round';
   ctx.beginPath();ctx.moveTo(-s*0.45,-s*0.7);ctx.lineTo(s*0.55,0);ctx.lineTo(-s*0.45,s*0.7);ctx.stroke();
   ctx.restore();ctx.globalAlpha=1;
 }
-// A slide track drawn as a line of chevrons pointing along travel; passed ones dim.
+// A slide track drawn as a tight line of chevrons pointing along travel; passed ones dim.
 function drawChevronTrack(pts,col,headU){
   const total=polyLen(pts);if(total<1)return;
-  const spacing=NOTE_R*1.9;
+  const spacing=W*0.028;
   const count=Math.max(2,Math.round(total/spacing));
   for(let k=1;k<count;k++){
     const u=k/count;
-    const p=alongPoly(pts,u);
-    drawChevron(p,tangentAt(pts,u),col,u<headU?0.16:0.92);
+    drawChevron(alongPoly(pts,u),tangentAt(pts,u),col,u<headU?0.16:0.92);
   }
 }
-// Touch: four arrows converging inward on a bright centre dot (maimai style).
-function drawTouch(p,u,fire){
-  ctx.save();ctx.translate(p.x,p.y);
-  const col=COL.touch, R=TOUCH_R;
-  const spread=R*(0.55+1.0*(1-u));   // arrows start far out and converge as u->1
-  const aw=R*0.5, tip=R*0.16;
-  ctx.shadowColor=col;ctx.shadowBlur=fire?18:9;
-  for(let k=0;k<4;k++){
-    ctx.save();ctx.rotate(k*Math.PI/2);
-    ctx.fillStyle=col;
-    ctx.beginPath();ctx.moveTo(-aw,-spread);ctx.lineTo(aw,-spread);ctx.lineTo(0,-tip);ctx.closePath();ctx.fill();
-    ctx.lineWidth=1.5;ctx.strokeStyle='rgba(255,255,255,.55)';ctx.stroke();
+// W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
+function drawFanTrack(paths,col,headU){
+  const [L,C,R]=paths, steps=12;
+  for(let k=1;k<=steps;k++){
+    const u=k/steps;
+    const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
+    const tan=tangentAt(C,u);
+    const ahead=W*0.02*(0.6+u);
+    const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
+    ctx.save();ctx.globalAlpha=u<headU?0.16:0.92;
+    ctx.strokeStyle=col;ctx.lineWidth=W*0.008*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
     ctx.restore();
   }
-  ctx.shadowBlur=12;ctx.fillStyle='#fff';
-  ctx.beginPath();ctx.arc(0,0,R*0.13,0,7);ctx.fill();
-  ctx.restore();
+}
+// Touch: a centre circle ringed by four hollow triangles that fade in while
+// separated, then slide inward to close into a square (the final form).
+function drawTouch(p,col,u,fire){
+  ctx.save();ctx.translate(p.x,p.y);
+  const R=TOUCH_R, uu=clamp01(u);
+  ctx.globalAlpha=clamp01(u/0.3);          // fade in over the first 30% of approach
+  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=fire?16:9;
+  ctx.lineWidth=Math.max(2,R*0.16);ctx.lineJoin='round';ctx.lineCap='round';
+  const gap=R*(0.95-0.55*uu);              // triangle apex: far at first, slides into the centre
+  for(let k=0;k<4;k++){
+    ctx.save();ctx.rotate(k*Math.PI/2);
+    ctx.beginPath();ctx.moveTo(-R,-R);ctx.lineTo(R,-R);ctx.lineTo(0,-gap);ctx.closePath();ctx.stroke();
+    ctx.restore();
+  }
+  ctx.beginPath();ctx.arc(0,0,R*0.2,0,7);ctx.stroke();   // middle circle (empty)
+  ctx.globalAlpha=1;ctx.restore();
 }
 // Touch hold: a four-colour diamond (as in the arcade), spinning while held,
 // with a countdown ring. Sized to the centre sensor like a touch note.
@@ -625,35 +641,46 @@ function render(chart,t,lead){
   for(const nt of chart.notes){
     const T=nt.time, col=noteColor(nt);
     if(nt.type==='tap'){
+      if(nt.slideHead)continue;                         // slide heads are drawn as stars
       if(t<T-lead||t>T+0.13)continue;
-      drawTap(ptOnRing(nt.pos,approachRadius(approachU(t,T,lead))),col,nt.break,nt.ex);
+      drawTap(ptOnRing(nt.pos,approachRadius(approachU(t,T,lead))),col,nt.break,nt.ex,popScale(t,T,lead));
     }else if(nt.type==='hold'){
       const end=T+nt.dur;
       if(t<T-lead||t>end+0.13)continue;
       const a=posAngle(nt.pos);
       const rHead=approachRadius(approachU(t,T,lead));
       const rTail=approachRadius(approachU(t,end,lead));
-      drawHold(a,rTail,rHead,col,nt.break,nt.ex);
+      drawHold(a,rTail,rHead,col,nt.break,nt.ex,popScale(t,T,lead));
     }else if(nt.type==='slide'){
-      const end=T+(nt.dur||0.3);
-      if(t<T-lead*0.85||t>end+0.1)continue;
-      const polys=slidePolylines(nt);
-      const moving=t>=T&&t<=end;
-      const headU=moving?(t-T)/(nt.dur||0.3):0;
-      drawChevronTrack(polys.main,col,headU);
-      for(const ex of polys.extra)drawChevronTrack(ex,col,headU);
-      // head star approaches until the slide starts moving
-      if(t<T)drawStar(ptOnRing(nt.from,approachRadius(approachU(t,T,lead))),col,0);
-      // travelling star spins faster the faster the slide moves
-      if(moving){
-        const u=clamp01(headU);
-        const speed=polyLen(polys.main)/(nt.dur||0.3);   // px per second
-        const rot=t*(speed/RING)*2.2;
-        drawStar(alongPoly(polys.main,u),col,rot);
+      const delay=nt.delaySec||0, dur=nt.dur||0.3;
+      const moveStart=T+delay, moveEnd=moveStart+dur;
+      if(t<T-lead||t>moveEnd+0.1)continue;
+      const moving=t>=moveStart&&t<=moveEnd;
+      const headU=moving?(t-moveStart)/dur:0;
+      // head star: pop in + approach, then sit on the button through the lead-in delay
+      const drawHead=()=>{
+        if(t>=moveStart)return;
+        const r=t<T?approachRadius(approachU(t,T,lead)):RING;
+        const sc=t<T?popScale(t,T,lead):1;
+        drawStar(ptOnRing(nt.from,r),col,0,sc);
+      };
+      if(nt.segs.some(s=>s.shape==='w')){                // W = one fan, three stars
+        const e=nt.segs[nt.segs.length-1].end;
+        const paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,RING),ptOnRing(tg,RING)]);
+        drawFanTrack(paths,col,headU);
+        drawHead();
+        if(moving){const rot=t*(polyLen(paths[1])/dur/RING)*2.2;
+          for(const pth of paths)drawStar(alongPoly(pth,clamp01(headU)),col,rot);}
+      }else{
+        const pts=slidePolylines(nt).main;
+        drawChevronTrack(pts,col,headU);
+        drawHead();
+        if(moving){const rot=t*(polyLen(pts)/dur/RING)*2.2;
+          drawStar(alongPoly(pts,clamp01(headU)),col,rot);}
       }
     }else if(nt.type==='touch'){
       if(t<T-lead||t>T+0.16)continue;
-      drawTouch(touchPoint(nt),clamp01(approachU(t,T,lead)),nt.fire);
+      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);
     }else if(nt.type==='touchHold'){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>end+0.13)continue;
