@@ -232,6 +232,7 @@ function extractCharts(text){
 const cv=document.getElementById('ring'),ctx=cv.getContext('2d');
 const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
 const RING=W*0.40;          // outer button-ring radius
+const SENSOR_C=RING*0.27;   // centre (C) sensor radius; touch notes match this size
 const INNER=0.20;           // notes spawn here (fraction of RING), never the dead centre
 const NOTE_R=W*0.024;
 const clamp01=u=>u<0?0:u>1?1:u;
@@ -323,7 +324,7 @@ let sensorImg=null;
 const SENSOR_IMG_SRC="";
 
 function drawSensorMap(g){
-  const rOuter=RING, rB=RING*0.58, rC=RING*0.27;
+  const rOuter=RING, rB=RING*0.58, rC=SENSOR_C;
   if(sensorImg){
     g.save();
     g.beginPath();g.arc(CX,CY,rOuter,0,7);g.clip();
@@ -457,22 +458,30 @@ function drawChevronTrack(pts,col,headU){
     drawChevron(p,tangentAt(pts,u),col,u<headU?0.16:0.92);
   }
 }
+// Touch: a hollow diamond as big as the centre (C) sensor, with a shrinking guide.
 function drawTouch(p,col,u,fire){
   ctx.save();ctx.translate(p.x,p.y);
   ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=fire?16:8;
-  ctx.lineWidth=3;diamondPath(NOTE_R*(0.8+0.9*(1-u)));ctx.stroke();   // shrinking guide
-  ctx.lineWidth=3.5;diamondPath(NOTE_R*0.75);ctx.stroke();            // hollow body
+  ctx.lineWidth=3;diamondPath(SENSOR_C*(1+0.7*(1-u)));ctx.stroke();   // shrinking guide
+  ctx.lineWidth=3.5;diamondPath(SENSOR_C);ctx.stroke();              // sensor-sized hollow body
   ctx.restore();
 }
-function drawTouchHold(p,col,u,active,holdU,fire){
+// Touch hold: a four-colour diamond (as in the arcade), spinning while held,
+// with a countdown ring. Sized to the centre sensor like a touch note.
+const TH_COLORS=['#ff4f6b','#ffd23b','#3ad36a','#36a3ff'];
+function drawTouchHold(p,u,active,holdU,fire){
   ctx.save();ctx.translate(p.x,p.y);
-  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=active?18:8;
-  if(!active){ctx.lineWidth=3;diamondPath(NOTE_R*(0.9+0.9*(1-u)));ctx.stroke();}
-  ctx.lineWidth=NOTE_R*0.42;octagonPath(NOTE_R*0.9);ctx.stroke();     // hollow octagon body
-  if(active){                                                          // countdown ring
-    ctx.lineWidth=3;ctx.beginPath();
-    ctx.arc(0,0,NOTE_R*1.5,-Math.PI/2,-Math.PI/2+(1-clamp01(holdU))*2*Math.PI);ctx.stroke();
-  }
+  const R=SENSOR_C;
+  ctx.shadowColor='#ffffff';ctx.shadowBlur=active?14:6;
+  if(!active){ctx.strokeStyle='rgba(255,255,255,.8)';ctx.lineWidth=3;diamondPath(R*(1+0.7*(1-u)));ctx.stroke();}
+  ctx.rotate((active?holdU:0)*Math.PI*0.5);
+  const v=[{x:0,y:-R},{x:R,y:0},{x:0,y:R},{x:-R,y:0}];
+  for(let k=0;k<4;k++){ctx.fillStyle=TH_COLORS[k];ctx.beginPath();
+    ctx.moveTo(0,0);ctx.lineTo(v[k].x,v[k].y);ctx.lineTo(v[(k+1)%4].x,v[(k+1)%4].y);ctx.closePath();ctx.fill();}
+  ctx.lineWidth=2.5;ctx.strokeStyle='rgba(255,255,255,.9)';diamondPath(R);ctx.stroke();
+  if(active){ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.beginPath();
+    ctx.arc(0,0,R*1.25,-Math.PI/2,-Math.PI/2+(1-clamp01(holdU))*2*Math.PI);ctx.stroke();}
+  void fire;
   ctx.restore();
 }
 
@@ -517,7 +526,7 @@ function render(chart,t,lead){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>end+0.13)continue;
       const active=t>=T&&t<=end;
-      drawTouchHold(touchPoint(nt),col,clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire);
+      drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire);
     }
   }
 }
@@ -634,13 +643,13 @@ const SAMPLE=`&title=Slide Showcase
 8w4[4:1],
 1-3-5-7[8:1],
 {4}
-13,57,2468,
-1b,5b,1b5b,
+1/3,5/7,2/4/6/8,
+1b,5b,1b/5b,
 1h[4:2],
 Ch[4:2],
 C,B5,E3,
 1h[4:2]/5,
-17/35,
+1/3/5/7,
 E`;
 $('src').value=SAMPLE;
 buildBoard();
