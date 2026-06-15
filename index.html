@@ -388,9 +388,10 @@ function buildSensors(){
   SENSORS.length=0;
   for(let p=1;p<=8;p++) SENSORS.push({id:'A'+p,kind:'A',poly:rectPoly(posAngle(p),R_A_IN,R_OUTER,A_HALFW)});
   for(let p=1;p<=8;p++) SENSORS.push({id:'B'+p,kind:'B',poly:octPoly(polarPt(posAngle(p),R_B),B_SZ)});
-  for(let p=1;p<=8;p++){const a=gapAngle(p);SENSORS.push({id:'E'+p,kind:'E',poly:sqPoly(polarPt(a,R_E),E_SZ,a)});}
   SENSORS.push({id:'C',kind:'C',poly:octPoly({x:CX,y:CY},R_C_SZ),inputR:RING*0.3}); // input = circle, not the shape
   for(let g=1;g<=8;g++) SENSORS.push({id:'D'+g,kind:'D',poly:dGapPoly(wrap8(g-1),g)});
+  // E is built last so it draws on top of A / D where they overlap.
+  for(let p=1;p<=8;p++){const a=gapAngle(p);SENSORS.push({id:'E'+p,kind:'E',poly:sqPoly(polarPt(a,R_E),E_SZ,a)});}
 }
 
 // ---- hit testing ----
@@ -428,20 +429,34 @@ function clearInput(){activeSensors=new Set();pointerInput=null;}
 
 // ---- drawing ----
 const LIT_FILL='rgba(150,162,196,0.92)';   // a sensor lit up by input
+const SENSOR_FILL='#0a0d15';               // opaque dark fill hides overlapping outlines
+const SEN_GLOW='rgba(180,200,255,0.7)';
 function fillPolyArr(poly){ctx.beginPath();ctx.moveTo(poly[0].x,poly[0].y);
   for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);ctx.closePath();ctx.fill();}
 function strokePolyArr(poly){ctx.beginPath();ctx.moveTo(poly[0].x,poly[0].y);
   for(let i=1;i<poly.length;i++)ctx.lineTo(poly[i].x,poly[i].y);ctx.closePath();ctx.stroke();}
-function drawSensorOutlines(){
+// Draw the board: each sensor is filled (dark at rest, lit when active) then
+// outlined, in array order. Because E is built last it paints over A/D where
+// they overlap, hiding the collapsing outlines underneath.
+function drawSensors(){
   const senCol='rgba(225,232,250,0.55)', senBright='rgba(235,240,252,0.80)';
   ctx.lineJoin='miter';ctx.lineCap='butt';
   ctx.strokeStyle=senBright;ctx.lineWidth=Math.max(1.6,W*0.0048);
   ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,Math.PI*2);ctx.stroke();
-  ctx.strokeStyle=senCol;ctx.lineWidth=Math.max(1.4,W*0.0035);
-  for(const s of SENSORS){if(s.kind==='D')continue; strokePolyArr(s.poly);} // D has no resting shape
+  for(const s of SENSORS){
+    const lit=activeSensors.has(s.id);
+    if(s.kind==='D'){                         // D has no resting shape; show only when lit
+      if(lit){ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;fillPolyArr(s.poly);ctx.restore();}
+      continue;
+    }
+    if(lit){ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;fillPolyArr(s.poly);ctx.restore();}
+    else{ctx.fillStyle=SENSOR_FILL;fillPolyArr(s.poly);}
+    ctx.strokeStyle=senCol;ctx.lineWidth=Math.max(1.4,W*0.0035);strokePolyArr(s.poly);
+  }
 }
+// Lit-only overlay, used when a custom sensor PNG is the background.
 function drawLitSensors(){
-  ctx.save();ctx.shadowColor='rgba(180,200,255,0.7)';ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;
+  ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;
   for(const s of SENSORS) if(activeSensors.has(s.id)) fillPolyArr(s.poly);
   ctx.restore();
 }
@@ -573,9 +588,10 @@ function drawBoard(){
     ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
     ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
     ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();
+    drawLitSensors();
+  } else {
+    drawSensors();
   }
-  drawLitSensors();
-  if(!sensorImg) drawSensorOutlines();
   drawButtons(ctx);
   if(pointerInput){
     ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
