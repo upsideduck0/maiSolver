@@ -583,21 +583,26 @@ function drawFanTrack(paths,col,headU){
     ctx.restore();
   }
 }
-// Touch: a centre circle ringed by four hollow triangles that fade in while
-// separated, then slide inward to close into a square (the final form).
+// Touch: four fixed right-isosceles triangles (90° apex toward the centre,
+// two 45° base angles). They start separated and slide radially inward, only
+// translating — never changing shape — until they close into a square.
 function drawTouch(p,col,u,fire){
   ctx.save();ctx.translate(p.x,p.y);
   const R=TOUCH_R, uu=clamp01(u);
   ctx.globalAlpha=clamp01(u/0.3);          // fade in over the first 30% of approach
   ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=fire?16:9;
-  ctx.lineWidth=Math.max(2,R*0.16);ctx.lineJoin='round';ctx.lineCap='round';
-  const gap=R*(0.95-0.55*uu);              // triangle apex: far at first, slides into the centre
+  ctx.lineWidth=Math.max(2,R*0.14);ctx.lineJoin='round';ctx.lineCap='round';
+  const sep=R*1.15*(1-uu);                 // radial separation: large at first, 0 at the hit
   for(let k=0;k<4;k++){
-    ctx.save();ctx.rotate(k*Math.PI/2);
-    ctx.beginPath();ctx.moveTo(-R,-R);ctx.lineTo(R,-R);ctx.lineTo(0,-gap);ctx.closePath();ctx.stroke();
+    ctx.save();ctx.rotate(k*Math.PI/2);ctx.translate(0,-sep);
+    ctx.beginPath();
+    ctx.moveTo(0,0);                       // 90° apex (points at the centre)
+    ctx.lineTo(-R,-R);                     // 45° base corner
+    ctx.lineTo(R,-R);                      // 45° base corner
+    ctx.closePath();ctx.stroke();
     ctx.restore();
   }
-  ctx.beginPath();ctx.arc(0,0,R*0.2,0,7);ctx.stroke();   // middle circle (empty)
+  ctx.beginPath();ctx.arc(0,0,R*0.15,0,7);ctx.stroke();   // middle circle (empty)
   ctx.globalAlpha=1;ctx.restore();
 }
 // Touch hold: a four-colour diamond (as in the arcade), spinning while held,
