@@ -45,6 +45,12 @@
   .mini{width:100%;height:34px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;display:block}
   .speedwrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   input[type=file]{font-size:12px;color:var(--dim)}
+  .modal-bg{position:fixed;inset:0;background:rgba(4,6,12,.66);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal-bg.open{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:340px;max-width:92vw;max-height:86vh;overflow:auto}
+  .modal h2{margin:0 0 14px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+  .modal .x{cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
+  .modal .x:hover{color:var(--txt)}
 </style>
 </head>
 <body>
@@ -99,30 +105,7 @@
       <div id="counts" style="margin-top:10px;display:flex;flex-direction:column;gap:3px;font-size:13px;font-variant-numeric:tabular-nums"></div>
     </div>
     <div class="panel">
-      <h2>Settings</h2>
-      <label class="fld">Note speed <span id="noteSpeedVal">7.00</span>
-        <input id="noteSpeed" type="range" min="1" max="10" step="0.25" value="7">
-      </label>
-      <label class="fld" style="margin-top:10px">Touch speed <span id="touchSpeedVal">7.00</span>
-        <input id="touchSpeed" type="range" min="1" max="10" step="0.25" value="7">
-      </label>
-      <label class="fld" style="margin-top:10px">Note size <span id="noteSizeVal">1.00×</span>
-        <input id="noteSize" type="range" min="0.5" max="2" step="0.05" value="1">
-      </label>
-      <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
-        <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
-      </label>
-      <label class="fld" style="margin-top:10px">Chevron width <span id="chevWidthVal">2.20×</span>
-        <input id="chevWidth" type="range" min="0.3" max="3" step="0.05" value="2.2">
-      </label>
-      <label class="fld" style="margin-top:10px">Chevron length <span id="chevLengthVal">1.00×</span>
-        <input id="chevLength" type="range" min="0.3" max="3" step="0.05" value="1">
-      </label>
-      <label class="fld" style="margin-top:10px">Chevron spacing <span id="chevSpacingVal">1.00×</span>
-        <input id="chevSpacing" type="range" min="0.3" max="3" step="0.05" value="1">
-      </label>
-      <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
-      <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
+      <button id="openSettings" class="primary" style="width:100%">⚙ Settings</button>
     </div>
     <div class="panel">
       <h2>Console</h2>
@@ -137,6 +120,38 @@
         Slide curves for <code>p q s z</code> are visual approximations.
       </p>
     </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="settingsModal">
+  <div class="modal">
+    <h2>Settings <span class="x" id="closeSettings">×</span></h2>
+    <label class="fld">Note speed <span id="noteSpeedVal">7.00</span>
+      <input id="noteSpeed" type="range" min="1" max="10" step="0.25" value="7">
+    </label>
+    <label class="fld" style="margin-top:10px">Touch speed <span id="touchSpeedVal">7.00</span>
+      <input id="touchSpeed" type="range" min="1" max="10" step="0.25" value="7">
+    </label>
+    <label class="fld" style="margin-top:10px">Note size <span id="noteSizeVal">1.00×</span>
+      <input id="noteSize" type="range" min="0.5" max="2" step="0.05" value="1">
+    </label>
+    <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
+      <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
+    </label>
+    <label class="fld" style="margin-top:10px">Chevron width <span id="chevWidthVal">1.00×</span>
+      <input id="chevWidth" type="range" min="0.3" max="3" step="0.05" value="1">
+    </label>
+    <label class="fld" style="margin-top:10px">Chevron h-width <span id="chevHWidthVal">1.00×</span>
+      <input id="chevHWidth" type="range" min="0.3" max="3" step="0.05" value="1">
+    </label>
+    <label class="fld" style="margin-top:10px">Chevron length <span id="chevLengthVal">1.00×</span>
+      <input id="chevLength" type="range" min="0.3" max="3" step="0.05" value="1">
+    </label>
+    <label class="fld" style="margin-top:10px">Chevron spacing <span id="chevSpacingVal">1.00×</span>
+      <input id="chevSpacing" type="range" min="0.3" max="3" step="0.05" value="1">
+    </label>
+    <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
+    <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
   </div>
 </div>
 
@@ -276,8 +291,62 @@ function approachU(t,T,lead){return (t-(T-lead))/lead;}
 function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
 function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
 
+// --- Slide sensor routing, from TRG's maimai slide/touch-sensor guide. ---
+// Sequences are for start=1, keyed by relative target rt=(end-start)%8 (0 = full loop).
+// q/qq/z are the mirror of p/pp/s, produced by reflecting the path.
+const P_TABLE={ // INNER LOOP (p): into the B ring, around, out to A_end
+  1:['A1','B2','B3','B4','B5','B6','B7','B8','A2'],
+  2:['A1','B2','B3','B4','B5','B6','B7','B8','A3'],
+  3:['A1','B2','B3','B4','B5','B6','B7','B8','A4'],
+  4:['A1','B2','B3','B4','A5'],
+  5:['A1','B2','B3','B4','B5','A6'],
+  6:['A1','B2','B3','B4','B5','B6','A7'],
+  7:['A1','B2','B3','B4','B5','B6','B7','A8'],
+  0:['A1','B2','B3','B4','B5','B6','B7','B8','A1'],
+};
+const S_TABLE={ 4:['A1','B8','A7','C','B3','B4','A5'] }; // ZIGZAG (s) to relative 5
+function rotSensor(id,by){
+  if(id.indexOf('/')>=0)return id.split('/').map(x=>rotSensor(x,by)).join('/');
+  if(id[0]==='C')return id;
+  const k=parseInt(id.slice(1));return id[0]+((((k-1+by)%8)+8)%8+1);
+}
+function sensorPos(id){
+  if(id.indexOf('/')>=0){const [a,b]=id.split('/');const pa=sensorPos(a),pb=sensorPos(b);return{x:(pa.x+pb.x)/2,y:(pa.y+pb.y)/2};}
+  if(id[0]==='C')return{x:CX,y:CY};
+  const k=parseInt(id.slice(1))||1;
+  if(id[0]==='A')return ptOnRing(k,R_OUTER);
+  if(id[0]==='B')return ptOnRing(k,R_B);
+  if(id[0]==='D')return ptGap(k,(R_A_IN+R_OUTER)/2);
+  if(id[0]==='E')return ptGap(k,R_E);
+  return{x:CX,y:CY};
+}
+function reflectAcross(p,a){const dx=Math.sin(a),dy=-Math.cos(a);const vx=p.x-CX,vy=p.y-CY;const dot=vx*dx+vy*dy;return{x:CX+2*dot*dx-vx,y:CY+2*dot*dy-vy};}
+function catmullRom(P,n){
+  if(P.length<3)return P.slice();
+  const out=[],pts=[P[0],...P,P[P.length-1]];
+  for(let i=1;i<pts.length-2;i++){
+    const a=pts[i-1],b=pts[i],c=pts[i+1],d=pts[i+2];
+    for(let j=0;j<n;j++){const t=j/n,t2=t*t,t3=t2*t;
+      out.push({x:0.5*((2*b.x)+(-a.x+c.x)*t+(2*a.x-5*b.x+4*c.x-d.x)*t2+(-a.x+3*b.x-3*c.x+d.x)*t3),
+                y:0.5*((2*b.y)+(-a.y+c.y)*t+(2*a.y-5*b.y+4*c.y-d.y)*t2+(-a.y+3*b.y-3*c.y+d.y)*t3)});}
+  }
+  out.push(P[P.length-1]);return out;
+}
+function routeSensors(seg,table,mirror){
+  const rt=((seg.end-seg.start)%8+8)%8;
+  const ids=table[rt];if(!ids)return null;
+  let pts=ids.map(id=>sensorPos(rotSensor(id,seg.start-1)));
+  if(mirror){const a=posAngle(seg.start);pts=pts.map(p=>reflectAcross(p,a));}
+  return catmullRom(pts,10);
+}
+
 function segPoints(seg){
   const RR=R_OUTER;
+  // Guide-routed shapes: inner loop (p/q) and zigzag (s/z) trace real sensors.
+  if(seg.shape==='p'){const r=routeSensors(seg,P_TABLE,false);if(r)return r;}
+  if(seg.shape==='q'){const r=routeSensors(seg,P_TABLE,true);if(r)return r;}
+  if(seg.shape==='s'){const r=routeSensors(seg,S_TABLE,false);if(r)return r;}
+  if(seg.shape==='z'){const r=routeSensors(seg,S_TABLE,true);if(r)return r;}
   const A=ptOnRing(seg.start,RR), B=ptOnRing(seg.end,RR);
   const aA=posAngle(seg.start), aB=posAngle(seg.end);
   switch(seg.shape){
@@ -486,9 +555,10 @@ let activeSensors=new Set();
 let pointerInput=null;              // {x,y,r} drawn while the mouse is held
 let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
-let chevWidth=2.2;                 // Settings: chevron width (default 2.2)
-let chevLength=1.0;                // Settings: chevron length
-let chevSpacing=1.0;               // Settings: chevron closeness
+let chevWidth=1.0;                 // Settings: chevron line thickness (base 2.2)
+let chevHWidth=1.0;                // Settings: chevron horizontal width / span
+let chevLength=1.0;                // Settings: chevron length (base 0.8)
+let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8)
 const INPUT_R=RING*0.06;           // radius of one input "finger"
 function triggerInput(inputs){
   const set=new Set();
@@ -601,9 +671,9 @@ function drawStar(p,col,rot,sc,alpha){
   ctx.restore();
 }
 function drawChevron(p,ang,col){
-  const wd=W*0.015*chevWidth, ln=W*0.013*chevLength;   // across-span vs along-travel depth
+  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength;   // horizontal span vs length(depth)
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
-  ctx.strokeStyle=col;ctx.lineWidth=W*0.008*chevWidth;
+  ctx.strokeStyle=col;ctx.lineWidth=W*0.0176*chevWidth;  // thickness
   ctx.lineCap='round';ctx.lineJoin='round';
   ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
   ctx.restore();
@@ -611,7 +681,7 @@ function drawChevron(p,ang,col){
 // Slide track: chevrons whose sensor (or an earlier one) has been cleared vanish.
 function drawChevronTrack(pts,col,sens,clearedIdx){
   const total=polyLen(pts);if(total<1)return;
-  const spacing=W*0.03*chevSpacing;
+  const spacing=W*0.054*chevSpacing;
   const count=Math.max(2,Math.round(total/spacing));
   for(let k=1;k<count;k++){
     const u=k/count;
@@ -627,10 +697,10 @@ function drawFanTrack(paths,col,clearU){
     if(u<=clearU)continue;                                        // cleared -> disappear
     const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
     const tan=tangentAt(C,u);
-    const ahead=W*0.013*chevLength*(0.6+u);
+    const ahead=W*0.0104*chevLength*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
     ctx.save();
-    ctx.strokeStyle=col;ctx.lineWidth=W*0.008*chevWidth*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.strokeStyle=col;ctx.lineWidth=W*0.0176*chevWidth*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
     ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
     ctx.restore();
   }
@@ -854,9 +924,13 @@ $('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=4.0/touc
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('chevWidth').oninput=e=>{chevWidth=parseFloat(e.target.value);$('chevWidthVal').textContent=chevWidth.toFixed(2)+'×';frame(true);};
+$('chevHWidth').oninput=e=>{chevHWidth=parseFloat(e.target.value);$('chevHWidthVal').textContent=chevHWidth.toFixed(2)+'×';frame(true);};
 $('chevLength').oninput=e=>{chevLength=parseFloat(e.target.value);$('chevLengthVal').textContent=chevLength.toFixed(2)+'×';frame(true);};
 $('chevSpacing').oninput=e=>{chevSpacing=parseFloat(e.target.value);$('chevSpacingVal').textContent=chevSpacing.toFixed(2)+'×';frame(true);};
 $('showA').onchange=e=>{showA=e.target.checked;frame(true);};
+$('openSettings').onclick=()=>$('settingsModal').classList.add('open');
+$('closeSettings').onclick=()=>$('settingsModal').classList.remove('open');
+$('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))$('settingsModal').classList.remove('open');};
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
