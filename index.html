@@ -344,7 +344,7 @@ function slidePointAt(type,sp,ep,e){
         let y; switch(rt){case 0:y=1.25*-Math.PI;break;case 1:y=1.125*-Math.PI;break;case 2:y=.75*-Math.PI;break;case 3:y=2.25*-Math.PI;break;case 4:default:y=2*-Math.PI;break;case 5:y=1.875*-Math.PI;break;case 6:y=1.625*-Math.PI;break;case 7:y=1.5*-Math.PI;}
         const m=v+y,b=Math.abs(y),g=w+Math.cos(m)*f,M=p+Math.sin(m)*f,_=Math.hypot(o-s.x,a-s.y),S=b*f,kk=_+S+Math.hypot(i.x-g,i.y-M),E=_/kk,$=S/kk;
         if(e<E){const t=e/E;return{x:s.x+(o-s.x)*t,y:s.y+(a-s.y)*t};}
-        if(e<E+$){const t=v+(e-E)/$*b;return{x:w+Math.cos(t)*f,y:p+Math.sin(t)*f};}
+        if(e<E+$){const t=v-(e-E)/$*b;return{x:w+Math.cos(t)*f,y:p+Math.sin(t)*f};}
         const t=(e-E-$)/(1-E-$);return{x:g+(i.x-g)*t,y:M+(i.y-M)*t};
       } else {
         const r=(sp+5-1)%8+1,n=slPoint(r),o=(s.x+n.x)/2,a=(s.y+n.y)/2,h=Math.hypot(o-cx,a-cy),c=Math.atan2(a-cy,o-cx);
@@ -607,15 +607,12 @@ function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4
 function drawTap(p,col,brk,ex,sc){
   const r=NOTE_R*(sc==null?1:sc), TAU=Math.PI*2;
   ctx.save();
-  ctx.shadowColor=col;ctx.shadowBlur=12;
   ctx.beginPath();
   ctx.arc(p.x,p.y,r,0,TAU);
   ctx.arc(p.x,p.y,r*0.52,0,TAU,true);   // hole
   ctx.fillStyle=col;ctx.fill('evenodd');
-  ctx.shadowBlur=0;
-  ctx.lineWidth=ex?3.5:2.4;ctx.strokeStyle=ex?'#ffffff':'rgba(255,255,255,.85)';
+  ctx.lineWidth=ex?3.5:3;ctx.strokeStyle='#ffffff';      // crisp white outline
   ctx.beginPath();ctx.arc(p.x,p.y,r,0,TAU);ctx.stroke();
-  ctx.lineWidth=1.6;ctx.strokeStyle='rgba(255,255,255,.6)';
   ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,TAU);ctx.stroke();
   ctx.restore();
 }
@@ -626,17 +623,17 @@ function drawHold(angle,rTail,rHead,col,brk,ex,sc){
   const off=NOTE_R*0.72;
   const t={x:CX+rad.x*rTail,y:CY+rad.y*rTail};
   const h={x:CX+rad.x*rHead,y:CY+rad.y*rHead};
-  ctx.save();
-  ctx.shadowColor=col;ctx.shadowBlur=10;
-  ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.34;ctx.lineJoin='round';
-  ctx.beginPath();
-  ctx.moveTo(h.x+per.x*off, h.y+per.y*off);
-  ctx.lineTo(t.x+per.x*off, t.y+per.y*off);
-  ctx.arc(t.x,t.y,off, angle, angle+Math.PI);            // tail cap (whole)
-  ctx.lineTo(h.x-per.x*off, h.y-per.y*off);
-  ctx.arc(h.x,h.y,off, angle+Math.PI, angle+2*Math.PI);  // head cap (whole)
-  ctx.closePath();ctx.stroke();
-  ctx.shadowBlur=0;ctx.restore();
+  ctx.save();ctx.lineJoin='round';
+  const cap=()=>{ctx.beginPath();
+    ctx.moveTo(h.x+per.x*off, h.y+per.y*off);
+    ctx.lineTo(t.x+per.x*off, t.y+per.y*off);
+    ctx.arc(t.x,t.y,off, angle, angle+Math.PI);            // tail cap (whole)
+    ctx.lineTo(h.x-per.x*off, h.y-per.y*off);
+    ctx.arc(h.x,h.y,off, angle+Math.PI, angle+2*Math.PI);  // head cap (whole)
+    ctx.closePath();};
+  cap();ctx.lineWidth=NOTE_R*0.34+3;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
+  cap();ctx.lineWidth=NOTE_R*0.34;ctx.strokeStyle=col;ctx.stroke();
+  ctx.restore();
   drawTap(h,col,brk,ex,sc);
 }
 // Hollow, round-cornered 5-point star (empty middle). rot spins/orients it; alpha optional.
@@ -644,20 +641,22 @@ function drawStar(p,col,rot,sc,alpha){
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
   if(alpha!=null)ctx.globalAlpha=clamp01(alpha);
   const R=NOTE_R*1.25*(sc==null?1:sc),r=R*0.5;
-  ctx.shadowColor=col;ctx.shadowBlur=14;
-  ctx.strokeStyle=col;ctx.lineWidth=R*0.32;ctx.lineJoin='round';ctx.lineCap='round';
-  ctx.beginPath();
-  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
-    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.closePath();ctx.stroke();
+  ctx.lineJoin='round';ctx.lineCap='round';
+  const path=()=>{ctx.beginPath();
+    for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
+      const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+    ctx.closePath();};
+  path();ctx.lineWidth=R*0.32+4;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
+  path();ctx.lineWidth=R*0.32;ctx.strokeStyle=col;ctx.stroke();
   ctx.restore();
 }
 function drawChevron(p,ang,col){
-  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength;   // horizontal span vs length(depth)
+  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength, lw=W*0.0176*chevWidth;
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
-  ctx.strokeStyle=col;ctx.lineWidth=W*0.0176*chevWidth;  // thickness
   ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);
+  ctx.lineWidth=lw+3;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
+  ctx.lineWidth=lw;ctx.strokeStyle=col;ctx.stroke();
   ctx.restore();
 }
 // Slide track: chevrons whose sensor (or an earlier one) has been cleared vanish.
@@ -673,7 +672,7 @@ function drawChevronTrack(pts,col,sens,clearedIdx){
 }
 // W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
 function drawFanTrack(paths,col,clearU){
-  const [L,C,R]=paths, steps=Math.max(5,Math.round(16/chevSpacing));
+  const [L,C,R]=paths, steps=Math.max(4,Math.round(16/(chevSpacing*1.8)));   // fan 1.8x sparser
   for(let k=1;k<=steps;k++){
     const u=k/steps;
     if(u<=clearU)continue;                                        // cleared -> disappear
@@ -681,9 +680,11 @@ function drawFanTrack(paths,col,clearU){
     const tan=tangentAt(C,u);
     const ahead=W*0.0104*chevLength*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
-    ctx.save();
-    ctx.strokeStyle=col;ctx.lineWidth=W*0.0176*chevWidth*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
-    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
+    const lw=W*0.0176*chevWidth*(0.8+1.4*u);
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);
+    ctx.lineWidth=lw+3;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
+    ctx.lineWidth=lw;ctx.strokeStyle=col;ctx.stroke();
     ctx.restore();
   }
 }
@@ -692,22 +693,18 @@ function drawFanTrack(paths,col,clearU){
 // translating — never changing shape — until they close into a square.
 function drawTouch(p,col,u,fire){
   ctx.save();ctx.translate(p.x,p.y);
-  const R=TOUCH_R, uu=clamp01(u);
+  const R=TOUCH_R, uu=clamp01(u), lw=Math.max(2,R*0.14);
   ctx.globalAlpha=clamp01(u/0.3);          // fade in over the first 30% of approach
-  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=fire?16:9;
-  ctx.lineWidth=Math.max(2,R*0.14);ctx.lineJoin='round';ctx.lineCap='round';
+  ctx.lineJoin='round';ctx.lineCap='round';
   const sep=R*1.15*(1-uu);                 // radial separation: large at first, 0 at the hit
-  for(let k=0;k<4;k++){
-    ctx.save();ctx.rotate(k*Math.PI/2);ctx.translate(0,-sep);
-    ctx.beginPath();
-    ctx.moveTo(0,0);                       // 90° apex (points at the centre)
-    ctx.lineTo(-R,-R);                     // 45° base corner
-    ctx.lineTo(R,-R);                      // 45° base corner
-    ctx.closePath();ctx.stroke();
-    ctx.restore();
-  }
-  ctx.beginPath();ctx.arc(0,0,R*0.15,0,Math.PI*2);ctx.stroke();   // middle circle (empty)
-  ctx.globalAlpha=1;ctx.restore();
+  const shape=()=>{
+    for(let k=0;k<4;k++){ctx.save();ctx.rotate(k*Math.PI/2);ctx.translate(0,-sep);
+      ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-R,-R);ctx.lineTo(R,-R);ctx.closePath();ctx.stroke();ctx.restore();}
+    ctx.beginPath();ctx.arc(0,0,R*0.15,0,Math.PI*2);ctx.stroke();
+  };
+  ctx.lineWidth=lw+3;ctx.strokeStyle='#ffffff';shape();   // white outline
+  ctx.lineWidth=lw;ctx.strokeStyle=col;shape();
+  void fire;ctx.globalAlpha=1;ctx.restore();
 }
 // Touch hold: a four-colour diamond (as in the arcade), spinning while held,
 // with a countdown ring. Sized to the centre sensor like a touch note.
@@ -715,12 +712,11 @@ const TH_COLORS=['#ff4f6b','#ffd23b','#3ad36a','#36a3ff'];
 function drawTouchHold(p,u,active,holdU,fire){
   ctx.save();ctx.translate(p.x,p.y);
   const R=TOUCH_R;
-  ctx.shadowColor='#ffffff';ctx.shadowBlur=active?14:6;
-  if(!active){ctx.strokeStyle='rgba(255,255,255,.8)';ctx.lineWidth=3;diamondPath(R*(1+0.7*(1-u)));ctx.stroke();}
+  if(!active){ctx.strokeStyle='#ffffff';ctx.lineWidth=3;diamondPath(R*(1+0.7*(1-u)));ctx.stroke();}
   const v=[{x:0,y:-R},{x:R,y:0},{x:0,y:R},{x:-R,y:0}];
   for(let k=0;k<4;k++){ctx.fillStyle=TH_COLORS[k];ctx.beginPath();
     ctx.moveTo(0,0);ctx.lineTo(v[k].x,v[k].y);ctx.lineTo(v[(k+1)%4].x,v[(k+1)%4].y);ctx.closePath();ctx.fill();}
-  ctx.lineWidth=2.5;ctx.strokeStyle='rgba(255,255,255,.9)';diamondPath(R);ctx.stroke();
+  ctx.lineWidth=3;ctx.strokeStyle='#ffffff';diamondPath(R);ctx.stroke();   // white outline
   if(active){ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.beginPath();
     ctx.arc(0,0,R*1.25,-Math.PI/2,-Math.PI/2+(1-clamp01(holdU))*2*Math.PI);ctx.stroke();}
   void fire;
