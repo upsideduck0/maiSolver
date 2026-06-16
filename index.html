@@ -291,107 +291,82 @@ function approachU(t,T,lead){return (t-(T-lead))/lead;}
 function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
 function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
 
-// --- Slide sensor routing, from TRG's maimai slide/touch-sensor guide. ---
-// Sequences below are canonical (start=1); rotIds rotates to the actual start,
-// mirrorIds reflects across the start axis (p=mirror q, z=mirror s, qq=mirror pp).
-function rotSensor(id,by){
-  if(id.indexOf('/')>=0)return id.split('/').map(x=>rotSensor(x,by)).join('/');
-  if(id[0]==='C')return id;
-  const k=parseInt(id.slice(1));return id[0]+((((k-1+by)%8)+8)%8+1);
-}
-function mirrorId(id,s){ // reflect a sensor across the axis through position s
-  if(id.indexOf('/')>=0)return id.split('/').map(x=>mirrorId(x,s)).join('/');
-  if(id[0]==='C')return id;
-  return id[0]+wrap8(2*s-parseInt(id.slice(1)));
-}
-const rotIds=(ids,by)=>ids.map(id=>rotSensor(id,by));
-const mirrorIds=(ids,s)=>ids.map(id=>mirrorId(id,s));
-function sensorPos(id){
-  if(id.indexOf('/')>=0){const [a,b]=id.split('/');const pa=sensorPos(a),pb=sensorPos(b);return{x:(pa.x+pb.x)/2,y:(pa.y+pb.y)/2};}
-  if(id[0]==='C')return{x:CX,y:CY};
-  const k=parseInt(id.slice(1))||1;
-  if(id[0]==='A')return ptOnRing(k,R_OUTER);
-  if(id[0]==='B')return ptOnRing(k,R_B);
-  if(id[0]==='D')return ptGap(k,(R_A_IN+R_OUTER)/2);
-  if(id[0]==='E')return ptGap(k,R_E);
-  return{x:CX,y:CY};
-}
-// INNER LOOP (q): A_start, E into the B ring, one full revolution, then on to A_end.
-function qInnerLoop(start,end){
-  const ids=['A'+start,'E'+wrap8(start+1)];
-  let b=wrap8(start+1); ids.push('B'+b);
-  for(let i=0;i<8;i++){b=wrap8(b+1);ids.push('B'+b);}     // full loop
-  while(b!==wrap8(end-1)){b=wrap8(b+1);ids.push('B'+b);}  // continue to the exit
-  ids.push('E'+end,'A'+end);
-  return ids;
-}
-const S_BASE=['A1','E1','B8','B7','C','B3','B4','E5','A5'];        // s,  1 -> 5
-const PP_BASE=['A1','B1','C','B4','A3','A2','B1','C','B4','A4'];   // pp, 1 -> 4
-// Ordered sensor ids a single segment traces, or null to fall back to geometry.
-function slideSegIds(seg){
-  const sh=seg.shape, rt=((seg.end-seg.start)%8+8)%8;
-  if(sh==='q')return qInnerLoop(seg.start,seg.end);
-  if(sh==='p')return mirrorIds(qInnerLoop(seg.start,wrap8(2*seg.start-seg.end)),seg.start);
-  if(sh==='s')return rt===4?rotIds(S_BASE,seg.start-1):null;
-  if(sh==='z')return rt===4?mirrorIds(rotIds(S_BASE,seg.start-1),seg.start):null;
-  if(sh==='pp')return rt===3?rotIds(PP_BASE,seg.start-1):null;
-  if(sh==='qq')return rt===3?mirrorIds(rotIds(PP_BASE,seg.start-1),seg.start):null;
-  return null;
-}
-function catmullRom(P,n){
-  if(P.length<3)return P.slice();
-  const out=[],pts=[P[0],...P,P[P.length-1]];
-  for(let i=1;i<pts.length-2;i++){
-    const a=pts[i-1],b=pts[i],c=pts[i+1],d=pts[i+2];
-    for(let j=0;j<n;j++){const t=j/n,t2=t*t,t3=t2*t;
-      out.push({x:0.5*((2*b.x)+(-a.x+c.x)*t+(2*a.x-5*b.x+4*c.x-d.x)*t2+(-a.x+3*b.x-3*c.x+d.x)*t3),
-                y:0.5*((2*b.y)+(-a.y+c.y)*t+(2*a.y-5*b.y+4*c.y-d.y)*t2+(-a.y+3*b.y-3*c.y+d.y)*t3)});}
-  }
-  out.push(P[P.length-1]);return out;
-}
-
-function segPoints(seg){
-  const RR=R_OUTER;
-  // Guide-routed shapes trace their real sensor path.
-  const ids=slideSegIds(seg);
-  if(ids)return catmullRom(ids.map(sensorPos),10);
-  const A=ptOnRing(seg.start,RR), B=ptOnRing(seg.end,RR);
-  const aA=posAngle(seg.start), aB=posAngle(seg.end);
-  switch(seg.shape){
-    case '-': return [A,B];
-    case 'V':{const Vp=ptOnRing(seg.via,RR);return [A,Vp,B];}
-    case '^':case '<':case '>':{
-      let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
-      if(seg.shape!=='^'){
-        // Direction is position-dependent: on the top half (1,2,7,8) > is clockwise
-        // and < counter-clockwise; on the bottom half (3,4,5,6) they mirror.
-        const top=(seg.start===1||seg.start===2||seg.start===7||seg.start===8);
-        const cw=(seg.shape==='>')?top:!top;     // clockwise = increasing angle
-        if(cw&&d<=0)d+=2*Math.PI;
-        if(!cw&&d>=0)d-=2*Math.PI;
+// --- Slide path geometry, ported from the mai-notes.com player (parametric
+// pointAt by slide type). Sensors are derived from the path ("perspective"). ---
+function slAngle(p){return -Math.PI/2+Math.PI/8+(p-1)*(Math.PI/4);}          // mai-notes it(p)
+function slPoint(p){const a=slAngle(p);return {x:CX+Math.cos(a)*R_OUTER,y:CY+Math.sin(a)*R_OUTER};}
+// Point at parameter e in [0,1] along a slide of `type` from sp to ep.
+function slidePointAt(type,sp,ep,e){
+  const s=slPoint(sp), i=slPoint(ep), cx=CX, cy=CY, rad=R_OUTER, rt=((ep-sp)%8+8)%8;
+  switch(type){
+    case '<': case '>': {
+      const r=-Math.PI/2,n=Math.PI/8,o=r+n+(sp-1)*(Math.PI/4);
+      let a=r+n+(ep-1)*(Math.PI/4),h=a-o;
+      while(h>Math.PI)h-=2*Math.PI; while(h<-Math.PI)h+=2*Math.PI;
+      const c=(sp===1||sp===2||sp===7||sp===8);
+      if(type==='>'){c?(h<=0&&(h+=2*Math.PI)):(h>=0&&(h-=2*Math.PI));}
+      else {c?(h>=0&&(h-=2*Math.PI)):(h<=0&&(h+=2*Math.PI));}
+      const l=o+h*e; return {x:cx+Math.cos(l)*rad,y:cy+Math.sin(l)*rad};
+    }
+    case '^': {
+      const u=slAngle(sp); let d=slAngle(ep),f=d-u;
+      while(f>Math.PI)f-=2*Math.PI; while(f<-Math.PI)f+=2*Math.PI;
+      const w=u+f*e; return {x:cx+Math.cos(w)*rad,y:cy+Math.sin(w)*rad};
+    }
+    case 's': case 'z': {
+      const p=i.x-s.x,v=i.y-s.y,y=Math.hypot(p,v),m=p/y,b=v/y,g=-b,M=m,_=.4*rad;
+      const S=s.x+m*y*.49+g*_,k=s.y+b*y*.49+M*_,E=s.x+m*y*.51-g*_,$=s.y+b*y*.51-M*_;
+      const O=Math.hypot(S-s.x,k-s.y),T=Math.hypot(E-S,$-k),x=O+T+Math.hypot(i.x-E,i.y-$),j=O/x,I=T/x;
+      if(e<j){const t=e/j;return{x:s.x+(S-s.x)*t,y:s.y+(k-s.y)*t};}
+      if(e<j+I){const t=(e-j)/I;return{x:S+(E-S)*t,y:k+($-k)*t};}
+      const t=(e-j-I)/(1-j-I);return{x:E+(i.x-E)*t,y:$+(i.y-$)*t};
+    }
+    case 'q': case 'qq': {
+      if(type==='qq'){
+        const r=(sp-1+4)%8+1,n=slPoint(r),o=s.x+.4*(n.x-s.x),a=s.y+.4*(n.y-s.y),h=n.x-s.x,c=n.y-s.y,l=Math.hypot(h,c),u=h/l,d=c/l,f=.45*rad,w=o+-d*f,p=a+u*f,v=Math.atan2(a-p,o-w);
+        let y; switch(rt){case 0:y=1.25*Math.PI;break;case 1:y=1.5*Math.PI;break;case 2:y=1.625*Math.PI;break;case 3:y=1.875*Math.PI;break;case 4:default:y=2*Math.PI;break;case 5:y=2.25*Math.PI;break;case 6:y=.75*Math.PI;break;case 7:y=1.125*Math.PI;}
+        const m=v+y,b=Math.abs(y),g=w+Math.cos(m)*f,M=p+Math.sin(m)*f,_=Math.hypot(o-s.x,a-s.y),S=b*f,kk=_+S+Math.hypot(i.x-g,i.y-M),E=_/kk,$=S/kk;
+        if(e<E){const t=e/E;return{x:s.x+(o-s.x)*t,y:s.y+(a-s.y)*t};}
+        if(e<E+$){const t=v+(e-E)/$*b;return{x:w+Math.cos(t)*f,y:p+Math.sin(t)*f};}
+        const t=(e-E-$)/(1-E-$);return{x:g+(i.x-g)*t,y:M+(i.y-M)*t};
+      } else {
+        const r=(sp+3-1)%8+1,n=slPoint(r),o=(s.x+n.x)/2,a=(s.y+n.y)/2,h=Math.hypot(o-cx,a-cy),c=Math.atan2(a-cy,o-cx);
+        let l; switch(rt){case 0:l=1.25*Math.PI;break;case 1:l=1.5*Math.PI;break;case 2:l=1.75*Math.PI;break;case 3:default:l=2*Math.PI;break;case 4:l=.25*Math.PI;break;case 5:l=.5*Math.PI;break;case 6:l=.75*Math.PI;break;case 7:l=Math.PI;}
+        const u=c+l,d=Math.abs(l),f=cx+Math.cos(u)*h,w=cy+Math.sin(u)*h,p=Math.hypot(o-s.x,a-s.y),v=d*h,y=p+v+Math.hypot(i.x-f,i.y-w),m=p/y,b=v/y;
+        if(e<m){const t=e/m;return{x:s.x+(o-s.x)*t,y:s.y+(a-s.y)*t};}
+        if(e<m+b){const t=c+(e-m)/b*l;return{x:cx+Math.cos(t)*h,y:cy+Math.sin(t)*h};}
+        const t=(e-m-b)/(1-m-b);return{x:f+(i.x-f)*t,y:w+(i.y-w)*t};
       }
-      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RR,y:CY-Math.cos(a)*RR};},36);
     }
-    case 'p':case 'q':case 'pp':case 'qq':{
-      // approximate teardrop loop with a bowed bezier; p/q opposite bow
-      const dir=(seg.shape[0]==='p')?1:-1;
-      const big=seg.shape.length===2?1.7:1.0;
-      const mid=lerp(A,B,0.5);
-      const nx=-(B.y-A.y), ny=(B.x-A.x); const nl=Math.hypot(nx,ny)||1;
-      const bow=RR*0.55*big*dir;
-      const ctrl={x:mid.x+nx/nl*bow, y:mid.y+ny/nl*bow};
-      return sample(u=>{const m=1-u;return{x:m*m*A.x+2*m*u*ctrl.x+u*u*B.x,y:m*m*A.y+2*m*u*ctrl.y+u*u*B.y};},24);
+    case 'p': case 'pp': {
+      if(type==='pp'){
+        const r=(sp-1+4)%8+1,n=slPoint(r),o=s.x+.4*(n.x-s.x),a=s.y+.4*(n.y-s.y),h=n.x-s.x,c=n.y-s.y,l=Math.hypot(h,c),u=h/l,d=c/l,f=.45*rad,w=o+d*f,p=a+-u*f,v=Math.atan2(a-p,o-w);
+        let y; switch(rt){case 0:y=1.25*-Math.PI;break;case 1:y=1.125*-Math.PI;break;case 2:y=.75*-Math.PI;break;case 3:y=2.25*-Math.PI;break;case 4:default:y=2*-Math.PI;break;case 5:y=1.875*-Math.PI;break;case 6:y=1.625*-Math.PI;break;case 7:y=1.5*-Math.PI;}
+        const m=v+y,b=Math.abs(y),g=w+Math.cos(m)*f,M=p+Math.sin(m)*f,_=Math.hypot(o-s.x,a-s.y),S=b*f,kk=_+S+Math.hypot(i.x-g,i.y-M),E=_/kk,$=S/kk;
+        if(e<E){const t=e/E;return{x:s.x+(o-s.x)*t,y:s.y+(a-s.y)*t};}
+        if(e<E+$){const t=v+(e-E)/$*b;return{x:w+Math.cos(t)*f,y:p+Math.sin(t)*f};}
+        const t=(e-E-$)/(1-E-$);return{x:g+(i.x-g)*t,y:M+(i.y-M)*t};
+      } else {
+        const r=(sp+5-1)%8+1,n=slPoint(r),o=(s.x+n.x)/2,a=(s.y+n.y)/2,h=Math.hypot(o-cx,a-cy),c=Math.atan2(a-cy,o-cx);
+        let l; switch(rt){case 0:l=1.25*-Math.PI;break;case 1:l=-Math.PI;break;case 2:l=.75*-Math.PI;break;case 3:l=.5*-Math.PI;break;case 4:l=.25*-Math.PI;break;case 5:default:l=2*-Math.PI;break;case 6:l=1.75*-Math.PI;break;case 7:l=1.5*-Math.PI;}
+        const u=c+l,d=Math.abs(l),f=cx+Math.cos(u)*h,w=cy+Math.sin(u)*h,p=Math.hypot(o-s.x,a-s.y),v=d*h,y=p+v+Math.hypot(i.x-f,i.y-w),m=p/y,b=v/y;
+        if(e<m){const t=e/m;return{x:s.x+(o-s.x)*t,y:s.y+(a-s.y)*t};}
+        if(e<m+b){const t=c+(e-m)/b*l;return{x:cx+Math.cos(t)*h,y:cy+Math.sin(t)*h};}
+        const t=(e-m-b)/(1-m-b);return{x:f+(i.x-f)*t,y:w+(i.y-w)*t};
+      }
     }
-    case 's':case 'z':{
-      const dir=seg.shape==='s'?1:-1;
-      const c1=lerp(A,{x:CX,y:CY},0.5), c2=lerp({x:CX,y:CY},B,0.5);
-      c1.x+=dir*RR*0.22; c2.x-=dir*RR*0.22;
-      return sample(u=>{const m=1-u;
-        return{x:m*m*m*A.x+3*m*m*u*c1.x+3*m*u*u*c2.x+u*u*u*B.x,
-               y:m*m*m*A.y+3*m*m*u*c1.y+3*m*u*u*c2.y+u*u*u*B.y};},28);
-    }
-    default: return [A,B];
+    default: return {x:s.x+(i.x-s.x)*e,y:s.y+(i.y-s.y)*e};   // '-' straight
   }
+}
+const PARAM_SHAPES={'-':1,'<':1,'>':1,'^':1,'s':1,'z':1,'p':1,'pp':1,'q':1,'qq':1};
+function segPoints(seg){
+  if(PARAM_SHAPES[seg.shape]){
+    const out=[];for(let k=0;k<=48;k++)out.push(slidePointAt(seg.shape,seg.start,seg.end,k/48));return out;
+  }
+  // V (reflect): straight to the vertex then to the end. w (fan) is in the renderer.
+  const A=ptOnRing(seg.start,R_OUTER), B=ptOnRing(seg.end,R_OUTER);
+  if(seg.shape==='V')return [A,ptOnRing(seg.via,R_OUTER),B];
+  return [A,B];
 }
 function slidePolylines(note){
   // returns {main:[pts], extra:[[pts],...]} ; wifi adds two side fans
