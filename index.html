@@ -27,7 +27,9 @@
   button:hover{border-color:#4a5170}
   button.primary{background:var(--accent);border-color:var(--accent);color:#1a0410;font-weight:600}
   button:disabled{opacity:.4;cursor:default}
-  input[type=range]{flex:1;accent-color:var(--accent)}
+  input[type=range]{flex:1;width:100%;accent-color:var(--accent);height:18px}
+  .chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin-top:12px;cursor:pointer}
+  .chk input{width:16px;height:16px;flex:0 0 auto;accent-color:var(--accent)}
   select,textarea{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:8px;padding:8px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
   textarea{width:100%;min-height:200px;resize:vertical;line-height:1.45;tab-size:2}
@@ -68,7 +70,7 @@
           </select>
         </div>
         <div class="speedwrap">Approach
-          <input id="lead" type="range" min="0.3" max="1.6" step="0.05" value="0.85" style="width:120px">
+          <input id="lead" type="range" min="0.3" max="1.6" step="0.05" value="0.85" style="width:200px">
           <span id="leadval">0.85s</span>
         </div>
       </div>
@@ -98,15 +100,7 @@
     <div class="panel">
       <h2>Chart info</h2>
       <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
-    </div>
-    <div class="panel">
-      <h2>Sensor map (background)</h2>
-      <label class="fld">Drop in a custom sensor-map PNG to show behind the playfield.
-        <input id="sensorfile" type="file" accept="image/*">
-      </label>
-      <div class="row" style="margin-top:8px">
-        <button id="sensorclear">Use built-in map</button>
-      </div>
+      <div id="counts" style="margin-top:10px;display:flex;flex-direction:column;gap:3px;font-size:13px;font-variant-numeric:tabular-nums"></div>
     </div>
     <div class="panel">
       <h2>Settings</h2>
@@ -116,6 +110,12 @@
       <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
         <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
       </label>
+      <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
+      <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
+    </div>
+    <div class="panel">
+      <h2>Console</h2>
+      <div id="console" style="font-size:12px;color:var(--dim);max-height:140px;overflow:auto;white-space:pre-wrap;line-height:1.5">No reports.</div>
     </div>
     <div class="panel">
       <h2>Notes</h2>
@@ -152,9 +152,9 @@ function parseDuration(content,bpm){
 }
 const SHAPES=['-','^','<','>','v','V','p','q','s','z','w','pp','qq'];
 const isDig=ch=>ch>='1'&&ch<='8';
-function parseSimai(raw){
+function parseSimai(raw,initialBpm){
   const s=(raw||'').replace(/\|\|.*?(\r?\n|$)/g,'\n');
-  const notes=[]; let i=0,time=0,bpm=120,div={val:4},first=0; const n=s.length;
+  const notes=[]; const reports=[]; let i=0,time=0,bpm=initialBpm||120,div={val:4},first=0; const n=s.length;
   function readBracket(o,c){let depth=0,out='';while(i<n){const ch=s[i++];if(ch===o){depth++;if(depth===1)continue;}if(ch===c){depth--;if(depth===0)break;}out+=ch;}return out;}
   function readDur(){if(s[i]!=='[')return null;return parseDuration(readBracket('[',']'),bpm);}
   function readShape(){const c=s[i];if(c==='p'&&s[i+1]==='p'){i+=2;return'pp';}if(c==='q'&&s[i+1]==='q'){i+=2;return'qq';}if(SHAPES.includes(c)){i++;return c;}return null;}
@@ -178,20 +178,22 @@ function parseSimai(raw){
     if(isSlideStart()){
       const slides=[];
       const parseChain=()=>{
-        const segs=[];let start=from;
+        const segs=[];let start=from,bad=false;
         while(true){const shape=readShape();if(!shape)break;let via=null,end;
           if(shape==='V'){via=parseInt(s[i],10);i++;end=parseInt(s[i],10);i++;}
           else{end=parseInt(s[i],10);i++;}
+          // ^ is ambiguous when the endpoints are diametrically opposite (e.g. 1^5)
+          if(shape==='^'&&(((start-end+8)%8)===4)){bad=true;reports.push(`Error: ${start}^${end} is ambiguous (opposite buttons); use < or >.`);}
           segs.push({shape,start,via,end});start=end;
           if(!isSlideStart())break;}
         let sbrk=brk,sex=ex;let dur=readDur();
         while('bx'.includes(s[i])){if(s[i]==='b')sbrk=true;else sex=true;i++;}
         if(!dur)dur=readDur();
-        return{segs,dur:dur?dur.dur:beatUnit(bpm,div),delay:dur?dur.delay:null,break:sbrk,ex:sex};
+        return{segs,dur:dur?dur.dur:beatUnit(bpm,div),delay:dur?dur.delay:null,break:sbrk,ex:sex,bad};
       };
       slides.push(parseChain());
       while(s[i]==='*'){i++;slides.push(parseChain());}
-      for(const sl of slides)notes.push({type:'slide',time:t,from,segs:sl.segs,dur:sl.dur,delay:sl.delay,delaySec:60/bpm,break:sl.break,ex:sl.ex,noHead});
+      for(const sl of slides)if(!sl.bad)notes.push({type:'slide',time:t,from,segs:sl.segs,dur:sl.dur,delay:sl.delay,delaySec:60/bpm,break:sl.break,ex:sl.ex,noHead});
       if(!noHead)notes.push({type:'tap',time:t,pos:from,break:brk,ex,slideHead:true});
       return;
     }
@@ -210,7 +212,7 @@ function parseSimai(raw){
   markEach(notes);
   let duration=time;for(const nt of notes){const e=nt.time+(nt.delaySec||0)+(nt.dur||0);if(e>duration)duration=e;}
   for(const nt of notes)nt.time+=first;
-  return{bpm,first,notes,duration:duration+first+1.5};
+  return{bpm,first,notes,duration:duration+first+1.5,reports};
 }
 // Tag simultaneous ("each") notes. A slide and its own auto-generated head tap
 // count as one object, so a lone slide is not mistaken for an each.
@@ -245,7 +247,7 @@ const SENSOR_C=RING*0.20;   // centre (C) octagon size; touch notes match this s
 const INNER=0.20;           // notes spawn here (fraction of RING), never the dead centre
 const NOTE_R0=W*0.024*2;          // base note radius (2x default)
 let NOTE_R=NOTE_R0;               // scaled live by Settings → Note size
-const TOUCH_R0=SENSOR_C*0.8*1.15; // base touch size (1.15x default)
+const TOUCH_R0=SENSOR_C*0.7;      // base touch size (~ the centre sensor when fully in)
 let TOUCH_R=TOUCH_R0;             // scaled live by Settings → Touch size
 const POP_T=0.13;                 // entrance "grow-in" duration (seconds)
 function popScale(t,T,lead){const k=(t-(T-lead))/POP_T;return k>=1?1:k<=0?0:k*k*(3-2*k);}
@@ -255,25 +257,27 @@ function ptOnRing(p,r){const a=posAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.c
 function gapAngle(p){return ((p-1)*45)*Math.PI/180;} // between-button slots for D/E
 function ptGap(p,r){const a=gapAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(a)*r};}
 const wrap8=p=>((p-1+8)%8)+1;
-// Approach radius (in pixels) for a note travelling from the inner spawn to the ring.
-function approachRadius(u){return RING*(INNER+(1-INNER)*clamp01(u));}
+// Approach radius (in pixels): notes travel from the inner spawn out to the outer ring.
+function approachRadius(u){const s=RING*INNER;return s+(R_OUTER-s)*clamp01(u);}
 function approachU(t,T,lead){return (t-(T-lead))/lead;}
 
 function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
 function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
 
 function segPoints(seg){
-  const A=ptOnRing(seg.start,RING), B=ptOnRing(seg.end,RING);
+  const RR=R_OUTER;
+  const A=ptOnRing(seg.start,RR), B=ptOnRing(seg.end,RR);
   const aA=posAngle(seg.start), aB=posAngle(seg.end);
   switch(seg.shape){
     case '-': return [A,B];
     case 'v': return [A,{x:CX,y:CY},B];
-    case 'V':{const Vp=ptOnRing(seg.via,RING);return [A,Vp,B];}
+    case 'V':{const Vp=ptOnRing(seg.via,RR);return [A,Vp,B];}
     case '^':case '<':case '>':{
-      let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<-Math.PI)d+=2*Math.PI;
-      if(seg.shape==='<'&&d>0)d-=2*Math.PI;
-      if(seg.shape==='>'&&d<0)d+=2*Math.PI;
-      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RING,y:CY-Math.cos(a)*RING};},24);
+      let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
+      // < always sweeps in the increasing-angle direction, > in the decreasing one.
+      if(seg.shape==='<'&&d<=0)d+=2*Math.PI;
+      if(seg.shape==='>'&&d>=0)d-=2*Math.PI;
+      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RR,y:CY-Math.cos(a)*RR};},32);
     }
     case 'p':case 'q':case 'pp':case 'qq':{
       // approximate teardrop loop with a bowed bezier; p/q opposite bow
@@ -281,14 +285,14 @@ function segPoints(seg){
       const big=seg.shape.length===2?1.7:1.0;
       const mid=lerp(A,B,0.5);
       const nx=-(B.y-A.y), ny=(B.x-A.x); const nl=Math.hypot(nx,ny)||1;
-      const bow=RING*0.55*big*dir;
+      const bow=RR*0.55*big*dir;
       const ctrl={x:mid.x+nx/nl*bow, y:mid.y+ny/nl*bow};
       return sample(u=>{const m=1-u;return{x:m*m*A.x+2*m*u*ctrl.x+u*u*B.x,y:m*m*A.y+2*m*u*ctrl.y+u*u*B.y};},24);
     }
     case 's':case 'z':{
       const dir=seg.shape==='s'?1:-1;
       const c1=lerp(A,{x:CX,y:CY},0.5), c2=lerp({x:CX,y:CY},B,0.5);
-      c1.x+=dir*RING*0.22; c2.x-=dir*RING*0.22;
+      c1.x+=dir*RR*0.22; c2.x-=dir*RR*0.22;
       return sample(u=>{const m=1-u;
         return{x:m*m*m*A.x+3*m*m*u*c1.x+3*m*u*u*c2.x+u*u*u*B.x,
                y:m*m*m*A.y+3*m*m*u*c1.y+3*m*u*u*c2.y+u*u*u*B.y};},28);
@@ -334,7 +338,7 @@ const A_HALFW = RING*0.23;        // half tangential width of an A rectangle
 function touchPoint(note){
   const area=note.area;
   if(area==='C')return{x:CX,y:CY};
-  if(area==='A')return ptOnRing(note.pos,RING);
+  if(area==='A')return ptOnRing(note.pos,R_OUTER);
   if(area==='B')return ptOnRing(note.pos,R_B);
   if(area==='E')return ptGap(note.pos,R_E);
   if(area==='D')return ptGap(note.pos,(R_A_IN+R_OUTER)/2); // gap between A sensors
@@ -432,6 +436,8 @@ function sensorHit(s,cx,cy,r){
 // entry point the hand simulation will call later; the mouse just feeds it.
 let activeSensors=new Set();
 let pointerInput=null;              // {x,y,r} drawn while the mouse is held
+let showA=true;                    // Settings: draw A sensor shapes at rest
+let lightupsOn=true;               // Settings: light sensors up on input
 const INPUT_R=RING*0.06;           // radius of one input "finger"
 function triggerInput(inputs){
   const set=new Set();
@@ -459,26 +465,24 @@ function drawSensors(){
   ctx.strokeStyle=senBright;ctx.lineWidth=Math.max(1.6,W*0.0048);
   ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,Math.PI*2);ctx.stroke();
   for(const s of SENSORS){
-    const lit=activeSensors.has(s.id);
-    if(s.kind==='D'){                         // D has no resting shape; show only when lit
-      if(lit){ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;fillPolyArr(s.poly);ctx.restore();}
-      continue;
-    }
+    const lit=lightupsOn&&activeSensors.has(s.id);
+    const hidden=(s.kind==='A'&&!showA)||s.kind==='D'; // A can be hidden; D has no resting shape
     if(lit){ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;fillPolyArr(s.poly);ctx.restore();}
-    else{ctx.fillStyle=SENSOR_FILL;fillPolyArr(s.poly);}
-    ctx.strokeStyle=senCol;ctx.lineWidth=Math.max(1.4,W*0.0035);strokePolyArr(s.poly);
+    else if(!hidden){ctx.fillStyle=SENSOR_FILL;fillPolyArr(s.poly);}
+    if(!hidden){ctx.strokeStyle=senCol;ctx.lineWidth=Math.max(1.4,W*0.0035);strokePolyArr(s.poly);}
   }
 }
 // Lit-only overlay, used when a custom sensor PNG is the background.
 function drawLitSensors(){
+  if(!lightupsOn)return;
   ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;
   for(const s of SENSORS) if(activeSensors.has(s.id)) fillPolyArr(s.poly);
   ctx.restore();
 }
-// Small white target dots on the ring, marking where notes land.
+// Small white target dots on the outer ring, marking where notes land/are input.
 function drawTargets(g){
-  for(let p=1;p<=8;p++){const b=ptOnRing(p,RING);
-    g.beginPath();g.arc(b.x,b.y,W*0.012,0,7);
+  for(let p=1;p<=8;p++){const b=ptOnRing(p,R_OUTER);
+    g.beginPath();g.arc(b.x,b.y,W*0.012,0,Math.PI*2);
     g.fillStyle='rgba(255,255,255,0.9)';g.fill();}
 }
 function buildBoard(){buildSensors();}
@@ -498,24 +502,18 @@ function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4
 
 // Tap/slide-head: a ring (donut) that is blank in the middle so the sensor map shows through.
 function drawTap(p,col,brk,ex,sc){
-  const r=NOTE_R*(sc==null?1:sc);
+  const r=NOTE_R*(sc==null?1:sc), TAU=Math.PI*2;
   ctx.save();
   ctx.shadowColor=col;ctx.shadowBlur=12;
   ctx.beginPath();
-  ctx.arc(p.x,p.y,r,0,7);
-  ctx.arc(p.x,p.y,r*0.52,0,7,true);   // hole
+  ctx.arc(p.x,p.y,r,0,TAU);
+  ctx.arc(p.x,p.y,r*0.52,0,TAU,true);   // hole
   ctx.fillStyle=col;ctx.fill('evenodd');
   ctx.shadowBlur=0;
   ctx.lineWidth=ex?3.5:2.4;ctx.strokeStyle=ex?'#ffffff':'rgba(255,255,255,.85)';
-  ctx.beginPath();ctx.arc(p.x,p.y,r,0,7);ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,r,0,TAU);ctx.stroke();
   ctx.lineWidth=1.6;ctx.strokeStyle='rgba(255,255,255,.6)';
-  ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,7);ctx.stroke();
-  if(brk){
-    ctx.strokeStyle='#ffe2b0';ctx.lineWidth=2;
-    for(let k=0;k<8;k++){const a=k*Math.PI/4;ctx.beginPath();
-      ctx.moveTo(p.x+Math.cos(a)*(r+5),p.y+Math.sin(a)*(r+5));
-      ctx.lineTo(p.x+Math.cos(a)*(r+11),p.y+Math.sin(a)*(r+11));ctx.stroke();}
-  }
+  ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,TAU);ctx.stroke();
   ctx.restore();
 }
 // Hold: a capsule drawn as two parallel rails (blank middle) between tail and head radii.
@@ -540,14 +538,16 @@ function drawHold(angle,rTail,rHead,col,brk,ex,sc){
   ctx.shadowBlur=0;ctx.restore();
   drawTap(h,col,brk,ex,sc);
 }
+// Hollow, round-cornered 5-point star (empty middle); spins via rot.
 function drawStar(p,col,rot,sc){
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
-  ctx.shadowColor=col;ctx.shadowBlur=16;ctx.fillStyle=col;
-  ctx.beginPath();const R=NOTE_R*1.2*(sc==null?1:sc),r=R*0.46;
+  const R=NOTE_R*1.25*(sc==null?1:sc),r=R*0.5;
+  ctx.shadowColor=col;ctx.shadowBlur=14;
+  ctx.strokeStyle=col;ctx.lineWidth=R*0.32;ctx.lineJoin='round';ctx.lineCap='round';
+  ctx.beginPath();
   for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
     const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.closePath();ctx.fill();
-  ctx.lineWidth=2;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.stroke();
+  ctx.closePath();ctx.stroke();
   ctx.restore();
 }
 function drawChevron(p,ang,col,alpha){
@@ -602,7 +602,7 @@ function drawTouch(p,col,u,fire){
     ctx.closePath();ctx.stroke();
     ctx.restore();
   }
-  ctx.beginPath();ctx.arc(0,0,R*0.15,0,7);ctx.stroke();   // middle circle (empty)
+  ctx.beginPath();ctx.arc(0,0,R*0.15,0,Math.PI*2);ctx.stroke();   // middle circle (empty)
   ctx.globalAlpha=1;ctx.restore();
 }
 // Touch hold: a four-colour diamond (as in the arcade), spinning while held,
@@ -657,6 +657,7 @@ function render(chart,t,lead){
       const rTail=approachRadius(approachU(t,end,lead));
       drawHold(a,rTail,rHead,col,nt.break,nt.ex,popScale(t,T,lead));
     }else if(nt.type==='slide'){
+      if(nt.bad)continue;
       const delay=nt.delaySec||0, dur=nt.dur||0.3;
       const moveStart=T+delay, moveEnd=moveStart+dur;
       if(t<T-lead||t>moveEnd+0.1)continue;
@@ -665,13 +666,13 @@ function render(chart,t,lead){
       // head star: pop in + approach, then sit on the button through the lead-in delay
       const drawHead=()=>{
         if(t>=moveStart)return;
-        const r=t<T?approachRadius(approachU(t,T,lead)):RING;
+        const r=t<T?approachRadius(approachU(t,T,lead)):R_OUTER;
         const sc=t<T?popScale(t,T,lead):1;
         drawStar(ptOnRing(nt.from,r),col,0,sc);
       };
       if(nt.segs.some(s=>s.shape==='w')){                // W = one fan, three stars
         const e=nt.segs[nt.segs.length-1].end;
-        const paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,RING),ptOnRing(tg,RING)]);
+        const paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
         drawFanTrack(paths,col,headU);
         drawHead();
         if(moving){const rot=t*(polyLen(paths[1])/dur/RING)*2.2;
@@ -730,7 +731,7 @@ function loadFromSource(){
       for(const k of keys){const o=document.createElement('option');o.value=k;
         o.textContent=`${names[k]||('inote_'+k)}${meta['lv_'+k]?' · Lv '+meta['lv_'+k]:''}`;sel.appendChild(o);}
       $('diffwrap').style.display='';
-      const build=k=>{let b=ex.charts[k];chart=parseSimai(b);
+      const build=k=>{let b=ex.charts[k];chart=parseSimai(b,parseFloat(meta.bpm)||undefined);
         if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}};
       build(parseInt(sel.value,10));
       sel.onchange=()=>{build(parseInt(sel.value,10));resetTransport();showInfo(meta,parseInt(sel.value,10));};
@@ -743,24 +744,32 @@ function loadFromSource(){
     resetTransport();
   }catch(e){$('err').textContent='Parse error: '+e.message;}
 }
+function fmtTime(sec){sec=Math.max(0,sec);const m=Math.floor(sec/60),s=Math.floor(sec%60);return m+':'+String(s).padStart(2,'0');}
+function noteCat(nt){if(nt.type==='touch'||nt.type==='touchHold')return 'Touch';if(nt.type==='hold')return 'Hold';if(nt.type==='slide')return 'Slide';return 'Tap';}
 function showInfo(meta,k){
-  const counts={};for(const nt of chart.notes){if(nt.slideHead)continue;counts[nt.type]=(counts[nt.type]||0)+1;}
-  const total=chart.notes.filter(n=>!n.slideHead).length;
   $('info').innerHTML=
     (meta.title?`<span><b>${esc(meta.title)}</b></span>`:'')+
     (meta.artist?`<span>${esc(meta.artist)}</span>`:'')+
     `<span>BPM <b>${chart.bpm}</b></span>`+
-    `<span>Length <b>${chart.duration.toFixed(1)}s</b></span>`+
-    `<span>Notes <b>${total}</b></span>`+
-    `<span style="color:var(--dim)">${counts.tap||0} tap · ${counts.hold||0} hold · ${counts.slide||0} slide · ${(counts.touch||0)+(counts.touchHold||0)} touch</span>`;
+    `<span>Length <b>${fmtTime(chart.duration)}</b></span>`;
+  showReports();updateCounts();
 }
+// Per-type counts as played/total, each on its own line; updates live with playback.
+function updateCounts(){
+  if(!chart){$('counts').innerHTML='';return;}
+  const cats=['Tap','Hold','Slide','Touch'];
+  const tot={Tap:0,Hold:0,Slide:0,Touch:0}, play={Tap:0,Hold:0,Slide:0,Touch:0};
+  for(const nt of chart.notes){if(nt.slideHead||nt.bad)continue;const c=noteCat(nt);tot[c]++;if(nt.time<=curT)play[c]++;}
+  $('counts').innerHTML=cats.map(c=>`<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">${c}</span><span>${play[c]}/${tot[c]}</span></div>`).join('');
+}
+function showReports(){const r=(chart&&chart.reports)||[];$('console').textContent=r.length?r.join('\n'):'No reports.';}
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
   $('seek').max=chart.duration;$('seek').value=0;updateLabel();frame(true);}
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
-  render(chart,curT,lead);drawMini(chart,curT);
+  render(chart,curT,lead);drawMini(chart,curT);updateCounts();
   if(!force){$('seek').value=curT;updateLabel();}
 }
 function loop(ts){
@@ -781,10 +790,10 @@ $('seek').oninput=e=>{curT=parseFloat(e.target.value);frame(true);drawMini(chart
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('lead').oninput=e=>{lead=parseFloat(e.target.value);$('leadval').textContent=lead.toFixed(2)+'s';frame(true);};
 $('load').onclick=loadFromSource;
-$('sensorfile').onchange=e=>{const f=e.target.files[0];if(f)setSensorImage(URL.createObjectURL(f));};
-$('sensorclear').onclick=()=>{sensorImg=null;buildBoard();frame(true);};
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
+$('showA').onchange=e=>{showA=e.target.checked;frame(true);};
+$('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
