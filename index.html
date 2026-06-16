@@ -176,7 +176,7 @@ function parseDuration(content,bpm){
   else dur=parseFloat(content);
   return {dur:isFinite(dur)?dur:0,delay};
 }
-const SHAPES=['-','^','<','>','v','V','p','q','s','z','w','pp','qq'];
+const SHAPES=['-','^','<','>','V','p','q','s','z','w','pp','qq'];
 const isDig=ch=>ch>='1'&&ch<='8';
 function parseSimai(raw,initialBpm){
   const s=(raw||'').replace(/\|\|.*?(\r?\n|$)/g,'\n');
@@ -292,24 +292,20 @@ function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
 function sample(fn,steps){const o=[];for(let k=0;k<=steps;k++)o.push(fn(k/steps));return o;}
 
 // --- Slide sensor routing, from TRG's maimai slide/touch-sensor guide. ---
-// Sequences are for start=1, keyed by relative target rt=(end-start)%8 (0 = full loop).
-// q/qq/z are the mirror of p/pp/s, produced by reflecting the path.
-const P_TABLE={ // INNER LOOP (p): into the B ring, around, out to A_end
-  1:['A1','B2','B3','B4','B5','B6','B7','B8','A2'],
-  2:['A1','B2','B3','B4','B5','B6','B7','B8','A3'],
-  3:['A1','B2','B3','B4','B5','B6','B7','B8','A4'],
-  4:['A1','B2','B3','B4','A5'],
-  5:['A1','B2','B3','B4','B5','A6'],
-  6:['A1','B2','B3','B4','B5','B6','A7'],
-  7:['A1','B2','B3','B4','B5','B6','B7','A8'],
-  0:['A1','B2','B3','B4','B5','B6','B7','B8','A1'],
-};
-const S_TABLE={ 4:['A1','B8','A7','C','B3','B4','A5'] }; // ZIGZAG (s) to relative 5
+// Sequences below are canonical (start=1); rotIds rotates to the actual start,
+// mirrorIds reflects across the start axis (p=mirror q, z=mirror s, qq=mirror pp).
 function rotSensor(id,by){
   if(id.indexOf('/')>=0)return id.split('/').map(x=>rotSensor(x,by)).join('/');
   if(id[0]==='C')return id;
   const k=parseInt(id.slice(1));return id[0]+((((k-1+by)%8)+8)%8+1);
 }
+function mirrorId(id,s){ // reflect a sensor across the axis through position s
+  if(id.indexOf('/')>=0)return id.split('/').map(x=>mirrorId(x,s)).join('/');
+  if(id[0]==='C')return id;
+  return id[0]+wrap8(2*s-parseInt(id.slice(1)));
+}
+const rotIds=(ids,by)=>ids.map(id=>rotSensor(id,by));
+const mirrorIds=(ids,s)=>ids.map(id=>mirrorId(id,s));
 function sensorPos(id){
   if(id.indexOf('/')>=0){const [a,b]=id.split('/');const pa=sensorPos(a),pb=sensorPos(b);return{x:(pa.x+pb.x)/2,y:(pa.y+pb.y)/2};}
   if(id[0]==='C')return{x:CX,y:CY};
@@ -320,7 +316,28 @@ function sensorPos(id){
   if(id[0]==='E')return ptGap(k,R_E);
   return{x:CX,y:CY};
 }
-function reflectAcross(p,a){const dx=Math.sin(a),dy=-Math.cos(a);const vx=p.x-CX,vy=p.y-CY;const dot=vx*dx+vy*dy;return{x:CX+2*dot*dx-vx,y:CY+2*dot*dy-vy};}
+// INNER LOOP (q): A_start, E into the B ring, one full revolution, then on to A_end.
+function qInnerLoop(start,end){
+  const ids=['A'+start,'E'+wrap8(start+1)];
+  let b=wrap8(start+1); ids.push('B'+b);
+  for(let i=0;i<8;i++){b=wrap8(b+1);ids.push('B'+b);}     // full loop
+  while(b!==wrap8(end-1)){b=wrap8(b+1);ids.push('B'+b);}  // continue to the exit
+  ids.push('E'+end,'A'+end);
+  return ids;
+}
+const S_BASE=['A1','E1','B8','B7','C','B3','B4','E5','A5'];        // s,  1 -> 5
+const PP_BASE=['A1','B1','C','B4','A3','A2','B1','C','B4','A4'];   // pp, 1 -> 4
+// Ordered sensor ids a single segment traces, or null to fall back to geometry.
+function slideSegIds(seg){
+  const sh=seg.shape, rt=((seg.end-seg.start)%8+8)%8;
+  if(sh==='q')return qInnerLoop(seg.start,seg.end);
+  if(sh==='p')return mirrorIds(qInnerLoop(seg.start,wrap8(2*seg.start-seg.end)),seg.start);
+  if(sh==='s')return rt===4?rotIds(S_BASE,seg.start-1):null;
+  if(sh==='z')return rt===4?mirrorIds(rotIds(S_BASE,seg.start-1),seg.start):null;
+  if(sh==='pp')return rt===3?rotIds(PP_BASE,seg.start-1):null;
+  if(sh==='qq')return rt===3?mirrorIds(rotIds(PP_BASE,seg.start-1),seg.start):null;
+  return null;
+}
 function catmullRom(P,n){
   if(P.length<3)return P.slice();
   const out=[],pts=[P[0],...P,P[P.length-1]];
@@ -332,26 +349,16 @@ function catmullRom(P,n){
   }
   out.push(P[P.length-1]);return out;
 }
-function routeSensors(seg,table,mirror){
-  const rt=((seg.end-seg.start)%8+8)%8;
-  const ids=table[rt];if(!ids)return null;
-  let pts=ids.map(id=>sensorPos(rotSensor(id,seg.start-1)));
-  if(mirror){const a=posAngle(seg.start);pts=pts.map(p=>reflectAcross(p,a));}
-  return catmullRom(pts,10);
-}
 
 function segPoints(seg){
   const RR=R_OUTER;
-  // Guide-routed shapes: inner loop (p/q) and zigzag (s/z) trace real sensors.
-  if(seg.shape==='p'){const r=routeSensors(seg,P_TABLE,false);if(r)return r;}
-  if(seg.shape==='q'){const r=routeSensors(seg,P_TABLE,true);if(r)return r;}
-  if(seg.shape==='s'){const r=routeSensors(seg,S_TABLE,false);if(r)return r;}
-  if(seg.shape==='z'){const r=routeSensors(seg,S_TABLE,true);if(r)return r;}
+  // Guide-routed shapes trace their real sensor path.
+  const ids=slideSegIds(seg);
+  if(ids)return catmullRom(ids.map(sensorPos),10);
   const A=ptOnRing(seg.start,RR), B=ptOnRing(seg.end,RR);
   const aA=posAngle(seg.start), aB=posAngle(seg.end);
   switch(seg.shape){
     case '-': return [A,B];
-    case 'v': return [A,{x:CX,y:CY},B];
     case 'V':{const Vp=ptOnRing(seg.via,RR);return [A,Vp,B];}
     case '^':case '<':case '>':{
       let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
@@ -956,12 +963,11 @@ const SAMPLE=`&title=Slide Showcase
 1^4[4:1],
 8<4[4:1],
 1>5[4:1],
-2v6[4:1],
 2V46[4:1],
 8p4[8:1],
 8q4[8:1],
-1pp5[2:1],
-1qq5[2:1],
+1pp4[2:1],
+1qq4[2:1],
 3s7[4:1],
 7z3[4:1],
 8w4[4:1],
