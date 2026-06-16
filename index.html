@@ -110,6 +110,9 @@
       <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
         <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
       </label>
+      <label class="fld" style="margin-top:10px">Chevron width <span id="chevVal">1.00×</span>
+        <input id="chevWidth" type="range" min="0.3" max="3" step="0.05" value="1">
+      </label>
       <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
       <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
     </div>
@@ -274,10 +277,15 @@ function segPoints(seg){
     case 'V':{const Vp=ptOnRing(seg.via,RR);return [A,Vp,B];}
     case '^':case '<':case '>':{
       let d=aB-aA; while(d>Math.PI)d-=2*Math.PI; while(d<=-Math.PI)d+=2*Math.PI;
-      // < always sweeps in the increasing-angle direction, > in the decreasing one.
-      if(seg.shape==='<'&&d<=0)d+=2*Math.PI;
-      if(seg.shape==='>'&&d>=0)d-=2*Math.PI;
-      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RR,y:CY-Math.cos(a)*RR};},32);
+      if(seg.shape!=='^'){
+        // Direction is position-dependent: on the top half (1,2,7,8) > is clockwise
+        // and < counter-clockwise; on the bottom half (3,4,5,6) they mirror.
+        const top=(seg.start===1||seg.start===2||seg.start===7||seg.start===8);
+        const cw=(seg.shape==='>')?top:!top;     // clockwise = increasing angle
+        if(cw&&d<=0)d+=2*Math.PI;
+        if(!cw&&d>=0)d-=2*Math.PI;
+      }
+      return sample(u=>{const a=aA+d*u;return{x:CX+Math.sin(a)*RR,y:CY-Math.cos(a)*RR};},36);
     }
     case 'p':case 'q':case 'pp':case 'qq':{
       // approximate teardrop loop with a bowed bezier; p/q opposite bow
@@ -430,6 +438,37 @@ function sensorHit(s,cx,cy,r){
   if(s.kind==='C')return Math.hypot(cx-CX,cy-CY)<=s.inputR+r;
   return circlePolyHit(cx,cy,r,s.poly);
 }
+function polyCentroid(poly){let x=0,y=0;for(const p of poly){x+=p.x;y+=p.y;}return{x:x/poly.length,y:y/poly.length};}
+// Which sensor contains a point (closest centre wins on overlap)? Used to map slide paths.
+function sensorAt(pt){
+  let best=null,bd=1e9;
+  for(const s of SENSORS){
+    const inside = s.kind==='C' ? Math.hypot(pt.x-CX,pt.y-CY)<=R_C_SZ*1.25 : pointInPoly(pt.x,pt.y,s.poly);
+    if(!inside)continue;
+    const c = s.kind==='C'?{x:CX,y:CY}:polyCentroid(s.poly);
+    const d=Math.hypot(pt.x-c.x,pt.y-c.y);
+    if(d<bd){bd=d;best=s.id;}
+  }
+  return best;
+}
+// Ordered sensors a slide path crosses, with the u at which each begins.
+function slideSensors(pts){
+  const N=48, seq=[], startU=[]; let prev=null;
+  for(let k=0;k<=N;k++){const u=k/N;const s=sensorAt(alongPoly(pts,u));
+    if(s&&s!==prev){seq.push(s);startU.push(u);prev=s;}}
+  return {seq,startU};
+}
+function seqIndexAtU(startU,u){let idx=0;for(let k=0;k<startU.length;k++){if(startU[k]<=u+1e-6)idx=k;else break;}return idx;}
+// Slide-skipping clear index: a sensor clears if the star reached it or it got
+// input, but only within 2 of the last cleared (skip=1 default).
+function clearedIndex(sens,autoIdx){
+  let cleared=-1;
+  for(let i=0;i<sens.seq.length;i++){
+    const act=(i<=autoIdx)||(lightupsOn&&activeSensors.has(sens.seq[i]));
+    if(act&&(i-cleared)<=2)cleared=i;
+  }
+  return cleared;
+}
 
 // ---- input state ----
 // activeSensors holds the ids currently lit. triggerInput() is the reusable
@@ -438,6 +477,7 @@ let activeSensors=new Set();
 let pointerInput=null;              // {x,y,r} drawn while the mouse is held
 let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
+let chevScale=1;                   // Settings: chevron size/width
 const INPUT_R=RING*0.06;           // radius of one input "finger"
 function triggerInput(inputs){
   const set=new Set();
@@ -516,25 +556,23 @@ function drawTap(p,col,brk,ex,sc){
   ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,TAU);ctx.stroke();
   ctx.restore();
 }
-// Hold: a capsule drawn as two parallel rails (blank middle) between tail and head radii.
+// Hold: a closed capsule (stadium) outline, blank middle, both ends whole.
 function drawHold(angle,rTail,rHead,col,brk,ex,sc){
   const rad={x:Math.sin(angle),y:-Math.cos(angle)};
   const per={x:Math.cos(angle),y:Math.sin(angle)};
-  const off=NOTE_R*0.85;
+  const off=NOTE_R*0.72;
   const t={x:CX+rad.x*rTail,y:CY+rad.y*rTail};
   const h={x:CX+rad.x*rHead,y:CY+rad.y*rHead};
   ctx.save();
   ctx.shadowColor=col;ctx.shadowBlur=10;
-  ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.42;ctx.lineCap='round';
-  for(const s of [1,-1]){
-    ctx.beginPath();
-    ctx.moveTo(t.x+per.x*off*s,t.y+per.y*off*s);
-    ctx.lineTo(h.x+per.x*off*s,h.y+per.y*off*s);
-    ctx.stroke();
-  }
-  // end caps
-  ctx.lineWidth=NOTE_R*0.42;
-  ctx.beginPath();ctx.arc(t.x,t.y,off,angle+Math.PI/2,angle+3*Math.PI/2);ctx.stroke();
+  ctx.strokeStyle=col;ctx.lineWidth=NOTE_R*0.34;ctx.lineJoin='round';
+  ctx.beginPath();
+  ctx.moveTo(h.x+per.x*off, h.y+per.y*off);
+  ctx.lineTo(t.x+per.x*off, t.y+per.y*off);
+  ctx.arc(t.x,t.y,off, angle, angle+Math.PI);            // tail cap (whole)
+  ctx.lineTo(h.x-per.x*off, h.y-per.y*off);
+  ctx.arc(h.x,h.y,off, angle+Math.PI, angle+2*Math.PI);  // head cap (whole)
+  ctx.closePath();ctx.stroke();
   ctx.shadowBlur=0;ctx.restore();
   drawTap(h,col,brk,ex,sc);
 }
@@ -550,35 +588,37 @@ function drawStar(p,col,rot,sc){
   ctx.closePath();ctx.stroke();
   ctx.restore();
 }
-function drawChevron(p,ang,col,alpha){
-  const s=W*0.02;
+function drawChevron(p,ang,col){
+  const s=W*0.02*chevScale;
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
-  ctx.globalAlpha=alpha;ctx.strokeStyle=col;ctx.lineWidth=W*0.009;
+  ctx.strokeStyle=col;ctx.lineWidth=W*0.009*chevScale;
   ctx.lineCap='round';ctx.lineJoin='round';
   ctx.beginPath();ctx.moveTo(-s*0.45,-s*0.7);ctx.lineTo(s*0.55,0);ctx.lineTo(-s*0.45,s*0.7);ctx.stroke();
-  ctx.restore();ctx.globalAlpha=1;
+  ctx.restore();
 }
-// A slide track drawn as a tight line of chevrons pointing along travel; passed ones dim.
-function drawChevronTrack(pts,col,headU){
+// Slide track: chevrons whose sensor (or an earlier one) has been cleared vanish.
+function drawChevronTrack(pts,col,sens,clearedIdx){
   const total=polyLen(pts);if(total<1)return;
-  const spacing=W*0.028;
+  const spacing=W*0.028*chevScale;
   const count=Math.max(2,Math.round(total/spacing));
   for(let k=1;k<count;k++){
     const u=k/count;
-    drawChevron(alongPoly(pts,u),tangentAt(pts,u),col,u<headU?0.16:0.92);
+    if(sens && seqIndexAtU(sens.startU,u)<=clearedIdx)continue;   // cleared -> disappear
+    drawChevron(alongPoly(pts,u),tangentAt(pts,u),col);
   }
 }
 // W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
-function drawFanTrack(paths,col,headU){
-  const [L,C,R]=paths, steps=12;
+function drawFanTrack(paths,col,clearU){
+  const [L,C,R]=paths, steps=14;
   for(let k=1;k<=steps;k++){
     const u=k/steps;
+    if(u<=clearU)continue;                                        // cleared -> disappear
     const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
     const tan=tangentAt(C,u);
-    const ahead=W*0.02*(0.6+u);
+    const ahead=W*0.02*chevScale*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
-    ctx.save();ctx.globalAlpha=u<headU?0.16:0.92;
-    ctx.strokeStyle=col;ctx.lineWidth=W*0.008*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.save();
+    ctx.strokeStyle=col;ctx.lineWidth=W*0.008*chevScale*(0.8+1.4*u);ctx.lineCap='round';ctx.lineJoin='round';
     ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
     ctx.restore();
   }
@@ -663,26 +703,32 @@ function render(chart,t,lead){
       if(t<T-lead||t>moveEnd+0.1)continue;
       const moving=t>=moveStart&&t<=moveEnd;
       const headU=moving?(t-moveStart)/dur:0;
-      // head star: pop in + approach, then sit on the button through the lead-in delay
+      const isFan=nt.segs.some(s=>s.shape==='w');
+      // cache geometry + sensor sequence on the note
+      if(!nt._pts){
+        if(isFan){const e=nt.segs[nt.segs.length-1].end;
+          nt._paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
+          nt._pts=nt._paths[1];}
+        else nt._pts=slidePolylines(nt).main;
+        nt._sens=slideSensors(nt._pts);
+      }
+      const spinW=(polyLen(nt._pts)/dur/RING)*3.0;   // star spins faster on faster slides
       const drawHead=()=>{
         if(t>=moveStart)return;
         const r=t<T?approachRadius(approachU(t,T,lead)):R_OUTER;
         const sc=t<T?popScale(t,T,lead):1;
-        drawStar(ptOnRing(nt.from,r),col,0,sc);
+        drawStar(ptOnRing(nt.from,r),col,t*spinW,sc);
       };
-      if(nt.segs.some(s=>s.shape==='w')){                // W = one fan, three stars
-        const e=nt.segs[nt.segs.length-1].end;
-        const paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
-        drawFanTrack(paths,col,headU);
+      const autoIdx=seqIndexAtU(nt._sens.startU,headU);
+      const cleared=clearedIndex(nt._sens,moving?autoIdx:-1);
+      if(isFan){
+        drawFanTrack(nt._paths,col,headU);          // fan clears behind the star
         drawHead();
-        if(moving){const rot=t*(polyLen(paths[1])/dur/RING)*2.2;
-          for(const pth of paths)drawStar(alongPoly(pth,clamp01(headU)),col,rot);}
+        if(moving)for(const pth of nt._paths)drawStar(alongPoly(pth,clamp01(headU)),col,t*spinW);
       }else{
-        const pts=slidePolylines(nt).main;
-        drawChevronTrack(pts,col,headU);
+        drawChevronTrack(nt._pts,col,nt._sens,cleared);
         drawHead();
-        if(moving){const rot=t*(polyLen(pts)/dur/RING)*2.2;
-          drawStar(alongPoly(pts,clamp01(headU)),col,rot);}
+        if(moving)drawStar(alongPoly(nt._pts,clamp01(headU)),col,t*spinW);
       }
     }else if(nt.type==='touch'){
       if(t<T-lead||t>T+0.16)continue;
@@ -792,6 +838,7 @@ $('lead').oninput=e=>{lead=parseFloat(e.target.value);$('leadval').textContent=l
 $('load').onclick=loadFromSource;
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
+$('chevWidth').oninput=e=>{chevScale=parseFloat(e.target.value);$('chevVal').textContent=chevScale.toFixed(2)+'×';frame(true);};
 $('showA').onchange=e=>{showA=e.target.checked;frame(true);};
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
