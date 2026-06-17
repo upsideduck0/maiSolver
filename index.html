@@ -653,7 +653,7 @@ function drawStar(p,col,rot,sc,alpha){
   ctx.restore();
 }
 function drawChevron(p,ang,col,alpha){
-  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength, lw=W*0.0176*chevWidth;
+  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength, lw=W*0.0176*1.3*chevWidth;   // baked 1.3x default
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
   ctx.globalAlpha=alpha==null?1:clamp01(alpha);
   ctx.lineCap='round';ctx.lineJoin='round';
@@ -664,13 +664,15 @@ function drawChevron(p,ang,col,alpha){
 }
 // Slide track: chevrons appear in order and vanish once cleared. P runs 0..1
 // over the appear window; each chevron starts fading once the previous reached
-// 25%, so consecutive starts are staggered by a quarter of one fade.
+// 25%, so consecutive starts are staggered by a quarter of one fade. Chevrons
+// are drawn last-to-first so earlier path points (e.g. the 6<4 part of 6<4>6)
+// sit ON TOP of later ones where a chained slide crosses itself.
 function drawChevronTrack(pts,col,sens,clearedIdx,P){
   const total=polyLen(pts);if(total<1)return;
   const spacing=W*0.054*chevSpacing;
   const count=Math.max(2,Math.round(total/spacing));
   const N=count-1, fd=1/(1+0.25*Math.max(0,N-1));   // per-chevron fade length in P-units
-  for(let k=1;k<count;k++){
+  for(let k=count-1;k>=1;k--){                        // draw later points first -> earlier on top
     const u=k/count;
     if(sens && seqIndexAtU(sens.startU,u)<=clearedIdx)continue;   // cleared -> disappear
     const op=P==null?1:clamp01(P/fd-0.25*(k-1));
@@ -691,7 +693,7 @@ function drawFanTrack(paths,col,clearU,P){
     const tan=tangentAt(C,u);
     const ahead=W*0.0104*chevLength*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
-    const lw=W*0.0176*chevWidth*(0.8+1.4*u);
+    const lw=W*0.0176*1.3*chevWidth*(0.8+1.4*u);   // baked 1.3x default
     ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=op;
     ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.013;   // shadow (not white outline)
     ctx.strokeStyle=col;ctx.lineWidth=lw;
@@ -704,7 +706,7 @@ function drawFanTrack(paths,col,clearU,P){
 // translating — never changing shape — until they close into a square.
 function drawTouch(p,col,u,fire){
   ctx.save();ctx.translate(p.x,p.y);
-  const R=TOUCH_R, uu=clamp01(u), lw=Math.max(2,R*0.14);
+  const R=TOUCH_R*0.8, uu=clamp01(u), lw=Math.max(2,R*0.22);   // 0.8x size; thicker triangles
   ctx.globalAlpha=clamp01(u/0.3);          // fade in over the first 30% of approach
   ctx.lineJoin='round';ctx.lineCap='round';
   const sep=R*1.15*(1-uu);                 // radial separation: large at first, 0 at the hit
@@ -722,7 +724,7 @@ function drawTouch(p,col,u,fire){
 const TH_COLORS=['#ff4f6b','#ffd23b','#3ad36a','#36a3ff'];
 function drawTouchHold(p,u,active,holdU,fire){
   ctx.save();ctx.translate(p.x,p.y);
-  const R=TOUCH_R;
+  const R=TOUCH_R*1.25;     // touch hold is 1.25x the touch base
   if(!active){ctx.strokeStyle='#ffffff';ctx.lineWidth=3;diamondPath(R*(1+0.7*(1-u)));ctx.stroke();}
   const v=[{x:0,y:-R},{x:R,y:0},{x:0,y:R},{x:-R,y:0}];
   for(let k=0;k<4;k++){ctx.fillStyle=TH_COLORS[k];ctx.beginPath();
@@ -782,8 +784,10 @@ function render(chart,t){
     // when the star reaches the button (T). Slide-Showing-Speed (0..1) shifts the
     // window's start later by SSS*lead; at 1.0 the chevrons all appear at once
     // exactly when the star is pressed (delay is not counted).
-    const appearStart=T-lead+slideShowingSpeed*lead;
-    const appearDur=(1-slideShowingSpeed)*lead;
+    // Slider 0..1 maps to effective 0.5..1.0, so SSS=0 behaves like the old SSS=0.5
+    const sssEff=0.5+0.5*slideShowingSpeed;
+    const appearStart=T-lead+sssEff*lead;
+    const appearDur=(1-sssEff)*lead;
     const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
     if(t<T) drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
     else if(t<moveStart){                              // sit at the button, grow, point along path
@@ -849,9 +853,21 @@ function drawMini(chart,t){
 
 /* ============================ app state ============================ */
 let chart=null,playing=false,curT=0,lastTs=0,speed=1;
-let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=4.8/7.0;  // maimai-style speeds (1-10); touch is calibrated so 9.0 feels like note 7.5
+let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=3.36/7.0;  // maimai-style speeds (1-10); touch K calibrated so 7.0 = previous 10.0
 let slideShowingSpeed=0.0;     // 0..1 in 0.1 steps; portion of (lead+delay) skipped before chevrons start to appear
 const $=id=>document.getElementById(id);
+
+// Shift every note and the chart duration by the &first offset plus a default
+// 4-beat metronome count-in. The 4 click times are stored on the chart so the
+// sound layer can fire them as count-in ticks.
+function applyLeadIn(chart, firstSec){
+  const beat=60/(chart.bpm||120);
+  const LEAD=4*beat;
+  const shift=(firstSec||0)+LEAD;
+  for(const n of chart.notes) n.time+=shift;
+  chart.duration+=shift;
+  chart.countInTimes=[0,beat,2*beat,3*beat]; // 4 metronome clicks before notes
+}
 
 function loadFromSource(){
   const text=$('src').value;
@@ -868,13 +884,15 @@ function loadFromSource(){
         o.textContent=`${names[k]||('inote_'+k)}${meta['lv_'+k]?' · Lv '+meta['lv_'+k]:''}`;sel.appendChild(o);}
       $('diffwrap').style.display='';
       const build=k=>{let b=ex.charts[k];chart=parseSimai(b,parseFloat(meta.bpm)||undefined);
-        if(meta.first){const f=parseFloat(meta.first)||0;chart.notes.forEach(n=>n.time+=f);chart.duration+=f;}};
+        const f=parseFloat(meta.first)||0;
+        applyLeadIn(chart,f);};
       build(parseInt(sel.value,10));
       sel.onchange=()=>{build(parseInt(sel.value,10));resetTransport();showInfo(meta,parseInt(sel.value,10));};
       showInfo(meta,parseInt(sel.value,10));
     }else{
       $('diffwrap').style.display='none';
       chart=parseSimai(body);
+      applyLeadIn(chart,0);
       showInfo({},null);
     }
     resetTransport();
@@ -943,6 +961,7 @@ function playGuideSound(){
 function rebuildSoundTimes(){
   soundTimes=[];
   if(!chart)return;
+  if(chart.countInTimes)for(const t of chart.countInTimes)soundTimes.push(t); // 4-beat metronome
   for(const nt of chart.notes){
     if(nt.bad)continue;
     if(nt.type==='tap')soundTimes.push(nt.time);                   // tap + star (slideHead)
@@ -975,7 +994,7 @@ $('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();frame(true)
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
 $('noteSpeed').oninput=e=>{noteSpeed=parseFloat(e.target.value);NLEAD=4.0/noteSpeed;$('noteSpeedVal').textContent=noteSpeed.toFixed(2);frame(true);};
-$('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=4.8/touchSpeed;$('touchSpeedVal').textContent=touchSpeed.toFixed(2);frame(true);};
+$('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=3.36/touchSpeed;$('touchSpeedVal').textContent=touchSpeed.toFixed(2);frame(true);};
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('chevWidth').oninput=e=>{chevWidth=parseFloat(e.target.value);$('chevWidthVal').textContent=chevWidth.toFixed(2)+'×';frame(true);};
