@@ -75,6 +75,7 @@
             <option value="1.5">1.5×</option>
           </select>
         </div>
+        <button id="openSettings" title="Settings" style="margin-left:auto;padding:6px 10px;font-size:13px">⚙ Settings</button>
       </div>
       <div class="legend">
         <span><i class="dot" style="background:var(--accent)"></i>Tap</span>
@@ -84,6 +85,11 @@
         <span><i class="dot" style="background:var(--each)"></i>Each</span>
         <span><i class="dot" style="background:var(--brk)"></i>Break</span>
       </div>
+    </div>
+    <div class="panel" style="width:min(72vh,520px);max-width:100%">
+      <h2>Chart info</h2>
+      <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
+      <div id="counts" style="margin-top:10px;display:flex;flex-direction:column;gap:3px;font-size:13px;font-variant-numeric:tabular-nums"></div>
     </div>
   </div>
 
@@ -98,14 +104,6 @@
         </label>
       </div>
       <div class="err" id="err"></div>
-    </div>
-    <div class="panel">
-      <h2>Chart info</h2>
-      <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
-      <div id="counts" style="margin-top:10px;display:flex;flex-direction:column;gap:3px;font-size:13px;font-variant-numeric:tabular-nums"></div>
-    </div>
-    <div class="panel">
-      <button id="openSettings" class="primary" style="width:100%">⚙ Settings</button>
     </div>
     <div class="panel">
       <h2>Console</h2>
@@ -664,26 +662,30 @@ function drawChevron(p,ang,col,alpha){
   ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
   ctx.restore();
 }
-// Slide track: chevrons appear in order (opacity via P) and vanish once cleared.
-function drawChevronTrack(pts,col,sens,clearedIdx,P,fadeW){
+// Slide track: chevrons appear in order and vanish once cleared. P runs 0..1
+// over the appear window; each chevron starts fading once the previous reached
+// 25%, so consecutive starts are staggered by a quarter of one fade.
+function drawChevronTrack(pts,col,sens,clearedIdx,P){
   const total=polyLen(pts);if(total<1)return;
   const spacing=W*0.054*chevSpacing;
   const count=Math.max(2,Math.round(total/spacing));
+  const N=count-1, fd=1/(1+0.25*Math.max(0,N-1));   // per-chevron fade length in P-units
   for(let k=1;k<count;k++){
     const u=k/count;
     if(sens && seqIndexAtU(sens.startU,u)<=clearedIdx)continue;   // cleared -> disappear
-    const op=P==null?1:clamp01((P-u)/fadeW);                       // appear one after another
+    const op=P==null?1:clamp01(P/fd-0.25*(k-1));
     if(op<=0)continue;
     drawChevron(alongPoly(pts,u),tangentAt(pts,u),col,op);
   }
 }
 // W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
-function drawFanTrack(paths,col,clearU,P,fadeW){
+function drawFanTrack(paths,col,clearU,P){
   const [L,C,R]=paths, steps=Math.max(4,Math.round(16/(chevSpacing*1.8)));   // fan 1.8x sparser
+  const fd=1/(1+0.25*Math.max(0,steps-1));
   for(let k=1;k<=steps;k++){
     const u=k/steps;
     if(u<=clearU)continue;                                        // cleared -> disappear
-    const op=P==null?1:clamp01((P-u)/fadeW);                      // appear one after another
+    const op=P==null?1:clamp01(P/fd-0.25*(k-1));                  // appear one after another
     if(op<=0)continue;
     const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
     const tan=tangentAt(C,u);
@@ -749,13 +751,17 @@ function drawBoard(){
     ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();ctx.restore();
   }
 }
-const SLIDE_FADE_W=0.06;       // chevron fade-in window (fraction of path)
 function render(chart,t){
   drawBoard();
   if(!chart)return;
-  // Pass 1: slides, drawn first so non-slide notes sit on top. Sort by later T
-  // first so earlier-spawning slides paint last and appear on top of later ones.
-  const slides=chart.notes.filter(n=>n.type==='slide'&&!n.bad).slice().sort((a,b)=>b.time-a.time);
+  // Pass 1: slides, drawn first so non-slide notes sit on top. The slide that
+  // APPEARS first (smaller spawn time T-lead, i.e. smaller T) must be on top.
+  // Iterate latest -> earliest so the earliest is painted LAST and ends up on
+  // top. Within identical T, the slide written FIRST in the chart should be on
+  // top, so we sort it LAST (larger index drawn first).
+  const _idx=new Map();chart.notes.forEach((n,i)=>_idx.set(n,i));
+  const slides=chart.notes.filter(n=>n.type==='slide'&&!n.bad).slice()
+    .sort((a,b)=>(b.time-a.time)||(_idx.get(b)-_idx.get(a)));
   for(const nt of slides){
     const T=nt.time, col=noteColor(nt), lead=NLEAD;
     const delay=nt.delaySec||0, dur=nt.dur||0.3;
@@ -771,15 +777,14 @@ function render(chart,t){
       else nt._pts=slidePolylines(nt).main;
       nt._sens=slideSensors(nt._pts);
     }
-    const spinW=(polyLen(nt._pts)/dur/RING)*3.0;
-    // Chevron appearance: chevrons fade in one-after-another over the (lead+delay)
-    // window from when the head spawns until motion begins. Slide-Showing-Speed
-    // (0..1) shifts the appear-window's start later by SSS*(lead+delay); at 1.0
-    // chevrons appear all at once exactly when motion starts.
-    const appearStart=T-lead+slideShowingSpeed*(lead+delay);
-    const appearDur=(1-slideShowingSpeed)*(lead+delay);
-    const P=appearDur<=0 ? (t>=appearStart?2:0)
-                         : ((t-appearStart)/appearDur)*(1+SLIDE_FADE_W);
+    const spinW=(polyLen(nt._pts)/dur/RING)*2.25;     // star spin (0.75x slower)
+    // Chevron appearance window spans only the star's fly-in time (lead), ending
+    // when the star reaches the button (T). Slide-Showing-Speed (0..1) shifts the
+    // window's start later by SSS*lead; at 1.0 the chevrons all appear at once
+    // exactly when the star is pressed (delay is not counted).
+    const appearStart=T-lead+slideShowingSpeed*lead;
+    const appearDur=(1-slideShowingSpeed)*lead;
+    const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
     if(t<T) drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
     else if(t<moveStart){                              // sit at the button, grow, point along path
       const g=delay>0?clamp01((t-T)/delay):1;
@@ -789,10 +794,10 @@ function render(chart,t){
     const autoIdx=(t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1;
     const cleared=clearedIndex(nt._sens,autoIdx);
     if(isFan){
-      drawFanTrack(nt._paths,col,prog,P,SLIDE_FADE_W);
+      drawFanTrack(nt._paths,col,prog,P);
       if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
     }else{
-      drawChevronTrack(nt._pts,col,nt._sens,cleared,P,SLIDE_FADE_W);
+      drawChevronTrack(nt._pts,col,nt._sens,cleared,P);
       if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
     }
   }
@@ -844,7 +849,7 @@ function drawMini(chart,t){
 
 /* ============================ app state ============================ */
 let chart=null,playing=false,curT=0,lastTs=0,speed=1;
-let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=4.0/7.0;  // maimai-style speeds (1-10)
+let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=4.8/7.0;  // maimai-style speeds (1-10); touch is calibrated so 9.0 feels like note 7.5
 let slideShowingSpeed=0.0;     // 0..1 in 0.1 steps; portion of (lead+delay) skipped before chevrons start to appear
 const $=id=>document.getElementById(id);
 
@@ -970,7 +975,7 @@ $('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();frame(true)
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
 $('noteSpeed').oninput=e=>{noteSpeed=parseFloat(e.target.value);NLEAD=4.0/noteSpeed;$('noteSpeedVal').textContent=noteSpeed.toFixed(2);frame(true);};
-$('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=4.0/touchSpeed;$('touchSpeedVal').textContent=touchSpeed.toFixed(2);frame(true);};
+$('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=4.8/touchSpeed;$('touchSpeedVal').textContent=touchSpeed.toFixed(2);frame(true);};
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('chevWidth').oninput=e=>{chevWidth=parseFloat(e.target.value);$('chevWidthVal').textContent=chevWidth.toFixed(2)+'×';frame(true);};
