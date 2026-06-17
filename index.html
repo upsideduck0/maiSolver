@@ -132,6 +132,9 @@
     <label class="fld" style="margin-top:10px">Touch speed <span id="touchSpeedVal">7.00</span>
       <input id="touchSpeed" type="range" min="1" max="10" step="0.25" value="7">
     </label>
+    <label class="fld" style="margin-top:10px">Slide showing speed <span id="slideShowVal">0.0</span>
+      <input id="slideShow" type="range" min="0" max="1" step="0.1" value="0">
+    </label>
     <label class="fld" style="margin-top:10px">Note size <span id="noteSizeVal">1.00×</span>
       <input id="noteSize" type="range" min="0.5" max="2" step="0.05" value="1">
     </label>
@@ -152,6 +155,7 @@
     </label>
     <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
     <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
+    <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds</label>
   </div>
 </div>
 
@@ -642,49 +646,54 @@ function drawStar(p,col,rot,sc,alpha){
   if(alpha!=null)ctx.globalAlpha=clamp01(alpha);
   const R=NOTE_R*1.25*(sc==null?1:sc),r=R*0.5;
   ctx.lineJoin='round';ctx.lineCap='round';
-  const path=()=>{ctx.beginPath();
-    for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
-      const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-    ctx.closePath();};
-  path();ctx.lineWidth=R*0.32+4;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
-  path();ctx.lineWidth=R*0.32;ctx.strokeStyle=col;ctx.stroke();
+  ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.016;   // shadow (not white outline)
+  ctx.strokeStyle=col;ctx.lineWidth=R*0.32;
+  ctx.beginPath();
+  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
+    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+  ctx.closePath();ctx.stroke();
   ctx.restore();
 }
-function drawChevron(p,ang,col){
+function drawChevron(p,ang,col,alpha){
   const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength, lw=W*0.0176*chevWidth;
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
+  ctx.globalAlpha=alpha==null?1:clamp01(alpha);
   ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);
-  ctx.lineWidth=lw+3;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
-  ctx.lineWidth=lw;ctx.strokeStyle=col;ctx.stroke();
+  ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.013;   // shadow (not white outline)
+  ctx.strokeStyle=col;ctx.lineWidth=lw;
+  ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
   ctx.restore();
 }
-// Slide track: chevrons whose sensor (or an earlier one) has been cleared vanish.
-function drawChevronTrack(pts,col,sens,clearedIdx){
+// Slide track: chevrons appear in order (opacity via P) and vanish once cleared.
+function drawChevronTrack(pts,col,sens,clearedIdx,P,fadeW){
   const total=polyLen(pts);if(total<1)return;
   const spacing=W*0.054*chevSpacing;
   const count=Math.max(2,Math.round(total/spacing));
   for(let k=1;k<count;k++){
     const u=k/count;
     if(sens && seqIndexAtU(sens.startU,u)<=clearedIdx)continue;   // cleared -> disappear
-    drawChevron(alongPoly(pts,u),tangentAt(pts,u),col);
+    const op=P==null?1:clamp01((P-u)/fadeW);                       // appear one after another
+    if(op<=0)continue;
+    drawChevron(alongPoly(pts,u),tangentAt(pts,u),col,op);
   }
 }
 // W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
-function drawFanTrack(paths,col,clearU){
+function drawFanTrack(paths,col,clearU,P,fadeW){
   const [L,C,R]=paths, steps=Math.max(4,Math.round(16/(chevSpacing*1.8)));   // fan 1.8x sparser
   for(let k=1;k<=steps;k++){
     const u=k/steps;
     if(u<=clearU)continue;                                        // cleared -> disappear
+    const op=P==null?1:clamp01((P-u)/fadeW);                      // appear one after another
+    if(op<=0)continue;
     const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
     const tan=tangentAt(C,u);
     const ahead=W*0.0104*chevLength*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
     const lw=W*0.0176*chevWidth*(0.8+1.4*u);
-    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
-    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);
-    ctx.lineWidth=lw+3;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
-    ctx.lineWidth=lw;ctx.strokeStyle=col;ctx.stroke();
+    ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=op;
+    ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.013;   // shadow (not white outline)
+    ctx.strokeStyle=col;ctx.lineWidth=lw;
+    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
     ctx.restore();
   }
 }
@@ -740,63 +749,76 @@ function drawBoard(){
     ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();ctx.restore();
   }
 }
+const SLIDE_FADE_W=0.06;       // chevron fade-in window (fraction of path)
 function render(chart,t){
   drawBoard();
   if(!chart)return;
+  // Pass 1: slides, drawn first so non-slide notes sit on top. Sort by later T
+  // first so earlier-spawning slides paint last and appear on top of later ones.
+  const slides=chart.notes.filter(n=>n.type==='slide'&&!n.bad).slice().sort((a,b)=>b.time-a.time);
+  for(const nt of slides){
+    const T=nt.time, col=noteColor(nt), lead=NLEAD;
+    const delay=nt.delaySec||0, dur=nt.dur||0.3;
+    const moveStart=T+delay, moveEnd=moveStart+dur;
+    if(t<T-lead||t>=moveEnd)continue;                 // no dwell at the ring; vanish at moveEnd
+    const moving=t>=moveStart&&t<=moveEnd;
+    const prog=clamp01((t-moveStart)/dur);
+    const isFan=nt.segs.some(s=>s.shape==='w');
+    if(!nt._pts){                                     // cache geometry + sensor sequence
+      if(isFan){const e=nt.segs[nt.segs.length-1].end;
+        nt._paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
+        nt._pts=nt._paths[1];}
+      else nt._pts=slidePolylines(nt).main;
+      nt._sens=slideSensors(nt._pts);
+    }
+    const spinW=(polyLen(nt._pts)/dur/RING)*3.0;
+    // Chevron appearance: chevrons fade in one-after-another over the (lead+delay)
+    // window from when the head spawns until motion begins. Slide-Showing-Speed
+    // (0..1) shifts the appear-window's start later by SSS*(lead+delay); at 1.0
+    // chevrons appear all at once exactly when motion starts.
+    const appearStart=T-lead+slideShowingSpeed*(lead+delay);
+    const appearDur=(1-slideShowingSpeed)*(lead+delay);
+    const P=appearDur<=0 ? (t>=appearStart?2:0)
+                         : ((t-appearStart)/appearDur)*(1+SLIDE_FADE_W);
+    if(t<T) drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
+    else if(t<moveStart){                              // sit at the button, grow, point along path
+      const g=delay>0?clamp01((t-T)/delay):1;
+      const tan=tangentAt(nt._pts,0);
+      drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g);
+    }
+    const autoIdx=(t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1;
+    const cleared=clearedIndex(nt._sens,autoIdx);
+    if(isFan){
+      drawFanTrack(nt._paths,col,prog,P,SLIDE_FADE_W);
+      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
+    }else{
+      drawChevronTrack(nt._pts,col,nt._sens,cleared,P,SLIDE_FADE_W);
+      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
+    }
+  }
+  // Pass 2: non-slide notes on top. Each vanishes the instant it reaches its
+  // beat (no +0.13s dwell at the ring).
   for(const nt of chart.notes){
+    if(nt.type==='slide')continue;
     const T=nt.time, col=noteColor(nt);
     const lead=(nt.type==='touch'||nt.type==='touchHold')?TLEAD:NLEAD;
     if(nt.type==='tap'){
-      if(nt.slideHead)continue;                         // slide heads are drawn as stars
-      if(t<T-lead||t>T+0.13)continue;
+      if(nt.slideHead)continue;                       // slide heads are drawn as stars
+      if(t<T-lead||t>=T)continue;
       drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
     }else if(nt.type==='hold'){
       const end=T+nt.dur;
-      if(t<T-lead||t>end+0.13)continue;
+      if(t<T-lead||t>=end)continue;
       const a=posAngle(nt.pos);
       const rHead=approachRadius(travelU(t,T,lead));
       const rTail=approachRadius(travelU(t,end,lead));
       drawHold(a,rTail,rHead,col,nt.break,nt.ex,growU(t,T,lead));
-    }else if(nt.type==='slide'){
-      if(nt.bad)continue;
-      const delay=nt.delaySec||0, dur=nt.dur||0.3;
-      const moveStart=T+delay, moveEnd=moveStart+dur;
-      if(t<T-lead||t>moveEnd)continue;                  // cut at moveEnd -> no end flash
-      const moving=t>=moveStart&&t<=moveEnd;
-      const prog=clamp01((t-moveStart)/dur);
-      const isFan=nt.segs.some(s=>s.shape==='w');
-      if(!nt._pts){                                     // cache geometry + sensor sequence
-        if(isFan){const e=nt.segs[nt.segs.length-1].end;
-          nt._paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
-          nt._pts=nt._paths[1];}
-        else nt._pts=slidePolylines(nt).main;
-        nt._sens=slideSensors(nt._pts);
-      }
-      const spinW=(polyLen(nt._pts)/dur/RING)*3.0;
-      // star NOTE: approaches like a note, spinning and growing in
-      if(t<T) drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
-      // star SLIDE: appears at 50% on reaching the button, grows to 100% over the
-      // lead-in delay, points in its travel direction, never spins
-      else if(t<moveStart){
-        const g=delay>0?clamp01((t-T)/delay):1;
-        const tan=tangentAt(nt._pts,0);
-        drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g);
-      }
-      const autoIdx=(t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1;
-      const cleared=clearedIndex(nt._sens,autoIdx);
-      if(isFan){
-        drawFanTrack(nt._paths,col,prog);
-        if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
-      }else{
-        drawChevronTrack(nt._pts,col,nt._sens,cleared);
-        if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
-      }
     }else if(nt.type==='touch'){
-      if(t<T-lead||t>T+0.16)continue;
+      if(t<T-lead||t>=T)continue;
       drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);
     }else if(nt.type==='touchHold'){
       const end=T+(nt.dur||0);
-      if(t<T-lead||t>end+0.13)continue;
+      if(t<T-lead||t>=end)continue;
       const active=t>=T&&t<=end;
       drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire);
     }
@@ -823,6 +845,7 @@ function drawMini(chart,t){
 /* ============================ app state ============================ */
 let chart=null,playing=false,curT=0,lastTs=0,speed=1;
 let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=4.0/7.0;  // maimai-style speeds (1-10)
+let slideShowingSpeed=0.0;     // 0..1 in 0.1 steps; portion of (lead+delay) skipped before chevrons start to appear
 const $=id=>document.getElementById(id);
 
 function loadFromSource(){
@@ -873,7 +896,7 @@ function updateCounts(){
 function showReports(){const r=(chart&&chart.reports)||[];$('console').textContent=r.length?r.join('\n'):'No reports.';}
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
-  $('seek').max=chart.duration;$('seek').value=0;updateLabel();frame(true);}
+  $('seek').max=chart.duration;$('seek').value=0;updateLabel();rebuildSoundTimes();frame(true);}
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
@@ -883,18 +906,67 @@ function frame(force){
 function loop(ts){
   if(playing){
     if(!lastTs)lastTs=ts;
-    const dt=(ts-lastTs)/1000*speed;lastTs=ts;curT+=dt;
+    const dt=(ts-lastTs)/1000*speed;lastTs=ts;
+    const prevT=curT;curT+=dt;
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';}
+    fireSounds(prevT,curT);
     frame(false);
   }else lastTs=0;
   requestAnimationFrame(loop);
 }
 
+/* ============================ sounds ============================ */
+// A single short "tick" generated with WebAudio fires on every tap, slide head
+// (star), hold start/end, touch, and touchHold start/end. Sounds are scheduled
+// from a pre-computed time list and only play during forward playback.
+let audioCtx=null, soundOn=true, soundTimes=[], soundIdx=0;
+function ensureAudio(){
+  if(audioCtx)return;
+  try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(_){audioCtx=null;}
+}
+function playGuideSound(){
+  if(!soundOn||!audioCtx)return;
+  const now=audioCtx.currentTime;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type='triangle'; o.frequency.value=1600;
+  g.gain.setValueAtTime(0.0001,now);
+  g.gain.exponentialRampToValueAtTime(0.18,now+0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+0.05);
+  o.connect(g).connect(audioCtx.destination);
+  o.start(now); o.stop(now+0.06);
+}
+function rebuildSoundTimes(){
+  soundTimes=[];
+  if(!chart)return;
+  for(const nt of chart.notes){
+    if(nt.bad)continue;
+    if(nt.type==='tap')soundTimes.push(nt.time);                   // tap + star (slideHead)
+    else if(nt.type==='hold'){soundTimes.push(nt.time);soundTimes.push(nt.time+nt.dur);}
+    else if(nt.type==='touch')soundTimes.push(nt.time);
+    else if(nt.type==='touchHold'){soundTimes.push(nt.time);soundTimes.push(nt.time+(nt.dur||0));}
+  }
+  soundTimes.sort((a,b)=>a-b);
+  resyncSounds();
+}
+function resyncSounds(){
+  // Binary-search-ish skip to the first sound at or after curT so seeks don't replay past sounds.
+  let lo=0,hi=soundTimes.length;
+  while(lo<hi){const mid=(lo+hi)>>1;if(soundTimes[mid]<curT)lo=mid+1;else hi=mid;}
+  soundIdx=lo;
+}
+function fireSounds(prev,now){
+  while(soundIdx<soundTimes.length&&soundTimes[soundIdx]<=now){
+    if(soundTimes[soundIdx]>=prev)playGuideSound();
+    soundIdx++;
+  }
+}
+
 /* ============================ wiring ============================ */
-$('play').onclick=()=>{if(!chart)return;playing=!playing;lastTs=0;
-  if(curT>=chart.duration)curT=0;$('play').textContent=playing?'⏸ Pause':'▶ Play';};
-$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;$('play').textContent='▶ Play';frame(false);};
-$('seek').oninput=e=>{curT=parseFloat(e.target.value);frame(true);drawMini(chart,curT);updateLabel();};
+$('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
+  playing=!playing;lastTs=0;
+  if(curT>=chart.duration){curT=0;resyncSounds();}$('play').textContent=playing?'⏸ Pause':'▶ Play';};
+$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();$('play').textContent='▶ Play';frame(false);};
+$('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();frame(true);drawMini(chart,curT);updateLabel();};
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
 $('noteSpeed').oninput=e=>{noteSpeed=parseFloat(e.target.value);NLEAD=4.0/noteSpeed;$('noteSpeedVal').textContent=noteSpeed.toFixed(2);frame(true);};
@@ -910,6 +982,8 @@ $('openSettings').onclick=()=>$('settingsModal').classList.add('open');
 $('closeSettings').onclick=()=>$('settingsModal').classList.remove('open');
 $('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))$('settingsModal').classList.remove('open');};
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
+$('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
+$('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
