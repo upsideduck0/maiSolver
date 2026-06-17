@@ -75,6 +75,7 @@
             <option value="1.5">1.5×</option>
           </select>
         </div>
+        <label class="chk" style="margin:0 0 0 12px"><input id="autoMode" type="checkbox" checked> Auto</label>
         <button id="openSettings" title="Settings" style="margin-left:auto;padding:6px 10px;font-size:13px">⚙ Settings</button>
       </div>
       <div class="legend">
@@ -178,7 +179,7 @@ function parseDuration(content,bpm){
   else dur=parseFloat(content);
   return {dur:isFinite(dur)?dur:0,delay};
 }
-const SHAPES=['-','^','<','>','V','p','q','s','z','w','pp','qq'];
+const SHAPES=['-','^','<','>','v','V','p','q','s','z','w','pp','qq'];
 const isDig=ch=>ch>='1'&&ch<='8';
 function parseSimai(raw,initialBpm){
   const s=(raw||'').replace(/\|\|.*?(\r?\n|$)/g,'\n');
@@ -301,6 +302,11 @@ function slPoint(p){const a=slAngle(p);return {x:CX+Math.cos(a)*R_OUTER,y:CY+Mat
 function slidePointAt(type,sp,ep,e){
   const s=slPoint(sp), i=slPoint(ep), cx=CX, cy=CY, rad=R_OUTER, rt=((ep-sp)%8+8)%8;
   switch(type){
+    case 'v': {   // via the centre: start -> C -> end  (e.g. 6v4 = A6 B6 C B4 A4)
+      if(Math.abs(ep-sp)===4)return{x:s.x+(i.x-s.x)*e,y:s.y+(i.y-s.y)*e};
+      if(e<0.5){const tt=2*e;return{x:s.x+(cx-s.x)*tt,y:s.y+(cy-s.y)*tt};}
+      const tt=2*(e-0.5);return{x:cx+(i.x-cx)*tt,y:cy+(i.y-cy)*tt};
+    }
     case '<': case '>': {
       const r=-Math.PI/2,n=Math.PI/8,o=r+n+(sp-1)*(Math.PI/4);
       let a=r+n+(ep-1)*(Math.PI/4),h=a-o;
@@ -360,7 +366,7 @@ function slidePointAt(type,sp,ep,e){
     default: return {x:s.x+(i.x-s.x)*e,y:s.y+(i.y-s.y)*e};   // '-' straight
   }
 }
-const PARAM_SHAPES={'-':1,'<':1,'>':1,'^':1,'s':1,'z':1,'p':1,'pp':1,'q':1,'qq':1};
+const PARAM_SHAPES={'-':1,'v':1,'<':1,'>':1,'^':1,'s':1,'z':1,'p':1,'pp':1,'q':1,'qq':1};
 function segPoints(seg){
   if(PARAM_SHAPES[seg.shape]){
     const out=[];for(let k=0;k<=48;k++)out.push(slidePointAt(seg.shape,seg.start,seg.end,k/48));return out;
@@ -722,12 +728,14 @@ function drawTouch(p,col,u,fire){
 // Touch hold: a four-colour diamond (as in the arcade), spinning while held,
 // with a countdown ring. Sized to the centre sensor like a touch note.
 const TH_COLORS=['#ff4f6b','#ffd23b','#3ad36a','#36a3ff'];
-function drawTouchHold(p,u,active,holdU,fire){
+const TH_GREY=['#454b58','#4d5360','#414752','#3c424d'];
+function drawTouchHold(p,u,active,holdU,fire,grey){
   ctx.save();ctx.translate(p.x,p.y);
+  const cols=grey?TH_GREY:TH_COLORS;
   const R=TOUCH_R*1.25;     // touch hold is 1.25x the touch base
   if(!active){ctx.strokeStyle='#ffffff';ctx.lineWidth=3;diamondPath(R*(1+0.7*(1-u)));ctx.stroke();}
   const v=[{x:0,y:-R},{x:R,y:0},{x:0,y:R},{x:-R,y:0}];
-  for(let k=0;k<4;k++){ctx.fillStyle=TH_COLORS[k];ctx.beginPath();
+  for(let k=0;k<4;k++){ctx.fillStyle=cols[k];ctx.beginPath();
     ctx.moveTo(0,0);ctx.lineTo(v[k].x,v[k].y);ctx.lineTo(v[(k+1)%4].x,v[(k+1)%4].y);ctx.closePath();ctx.fill();}
   ctx.lineWidth=3;ctx.strokeStyle='#ffffff';diamondPath(R);ctx.stroke();   // white outline
   if(active){ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.beginPath();
@@ -805,31 +813,56 @@ function render(chart,t){
       if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
     }
   }
-  // Pass 2: non-slide notes on top. Each vanishes the instant it reaches its
-  // beat (no +0.13s dwell at the ring).
+  // Pass 2: non-slide notes on top. In Auto each vanishes at its beat; with Auto
+  // off, judgment drives the visuals (hit -> vanish, miss -> fly past / grey / fade).
+  const GREY='#5b6472';
   for(const nt of chart.notes){
     if(nt.type==='slide')continue;
     const T=nt.time, col=noteColor(nt);
     const lead=(nt.type==='touch'||nt.type==='touchHold')?TLEAD:NLEAD;
+    const j=nt._j, win=winFor(nt);
     if(nt.type==='tap'){
       if(nt.slideHead)continue;                       // slide heads are drawn as stars
-      if(t<T-lead||t>=T)continue;
-      drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
+      if(t<T-lead)continue;
+      if(autoMode){
+        if(t>=T)continue;
+        drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
+      }else if(j&&j.tier!=='miss'){                   // hit -> gone at the hit moment
+        if(t>=j.t)continue;
+        drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
+      }else if((j&&j.tier==='miss')||t>T+win.good){   // missed -> fly past the ring, fading
+        const pp=(t-(T+win.good))/0.22;
+        if(pp>=1)continue;
+        ctx.save();ctx.globalAlpha=Math.max(0,1-pp);
+        drawTap(ptOnRing(nt.pos,R_OUTER*(1+0.4*pp)),col,nt.break,nt.ex,1);
+        ctx.restore();
+      }else{                                          // pending -> reach the ring at T and wait
+        const r=t<T?approachRadius(travelU(t,T,lead)):R_OUTER;
+        drawTap(ptOnRing(nt.pos,r),col,nt.break,nt.ex,t<T?growU(t,T,lead):1);
+      }
     }else if(nt.type==='hold'){
       const end=T+nt.dur;
       if(t<T-lead||t>=end)continue;
       const a=posAngle(nt.pos);
       const rHead=approachRadius(travelU(t,T,lead));
       const rTail=approachRadius(travelU(t,end,lead));
-      drawHold(a,rTail,rHead,col,nt.break,nt.ex,growU(t,T,lead));
+      // greyed once it reaches the button if the first input was not received
+      const startHit=j&&j.tier!=='miss';
+      const hcol=(!autoMode&&t>=T&&!startHit)?GREY:col;
+      drawHold(a,rTail,rHead,hcol,nt.break,nt.ex,growU(t,T,lead));
     }else if(nt.type==='touch'){
-      if(t<T-lead||t>=T)continue;
-      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);
+      if(t<T-lead)continue;
+      if(autoMode){ if(t>=T)continue; }
+      else if(j&&j.tier!=='miss'){ if(t>=j.t)continue; }       // hit -> gone
+      else if((j&&j.tier==='miss')||t>T+win.good)continue;     // missed -> gone after the window
+      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);   // else stay at last state
     }else if(nt.type==='touchHold'){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>=end)continue;
       const active=t>=T&&t<=end;
-      drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire);
+      const startHit=j&&j.tier!=='miss';
+      const grey=!autoMode&&t>=T&&!startHit;
+      drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire,grey);
     }
   }
 }
@@ -855,7 +888,41 @@ function drawMini(chart,t){
 let chart=null,playing=false,curT=0,lastTs=0,speed=1;
 let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=3.36/7.0;  // maimai-style speeds (1-10); touch K calibrated so 7.0 = previous 10.0
 let slideShowingSpeed=0.0;     // 0..1 in 0.1 steps; portion of (lead+delay) skipped before chevrons start to appear
+let autoMode=true;             // when off, notes must be hit by input or they miss
 const $=id=>document.getElementById(id);
+
+/* ============================ judgment ============================ */
+// maimai DX timing windows (seconds). Touch windows are a bit wider.
+const NWIN={cp:1/60, p:0.05, great:0.10, good:0.15};
+const TWIN={cp:0.025, p:0.06, great:0.12, good:0.18};
+function winFor(nt){return (nt.type==='touch'||nt.type==='touchHold')?TWIN:NWIN;}
+function tierFor(dt,win){const a=Math.abs(dt);return a<=win.cp?'cp':a<=win.p?'p':a<=win.great?'great':a<=win.good?'good':'miss';}
+function noteTarget(nt){
+  if(nt.type==='touch'||nt.type==='touchHold')return nt.area==='C'?'C':nt.area+nt.pos;
+  return 'A'+nt.pos;                                 // tap, hold
+}
+const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold');
+function resetJudgments(){if(chart)for(const n of chart.notes)n._j=null;}
+function updateMisses(t){
+  if(autoMode||!chart)return;
+  for(const nt of chart.notes){
+    if(!isJudgeNote(nt)||nt._j)continue;
+    if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
+  }
+}
+// Judge the closest unjudged note on each pressed sensor that is within window.
+function judgeInput(sensorSet){
+  if(autoMode||!chart)return;
+  for(const sid of sensorSet){
+    let best=null,bd=1e9;
+    for(const nt of chart.notes){
+      if(!isJudgeNote(nt)||nt._j||noteTarget(nt)!==sid)continue;
+      const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
+      if(a<bd){bd=a;best=nt;}
+    }
+    if(best)best._j={tier:tierFor(curT-best.time,winFor(best)),t:curT};
+  }
+}
 
 // Shift every note and the chart duration by the &first offset plus a default
 // 4-beat metronome count-in. The 4 click times are stored on the chart so the
@@ -919,7 +986,7 @@ function updateCounts(){
 function showReports(){const r=(chart&&chart.reports)||[];$('console').textContent=r.length?r.join('\n'):'No reports.';}
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
-  $('seek').max=chart.duration;$('seek').value=0;updateLabel();rebuildSoundTimes();frame(true);}
+  $('seek').max=chart.duration;$('seek').value=0;updateLabel();rebuildSoundTimes();resetJudgments();frame(true);}
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
@@ -933,6 +1000,7 @@ function loop(ts){
     const prevT=curT;curT+=dt;
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';}
     fireSounds(prevT,curT);
+    updateMisses(curT);
     frame(false);
   }else lastTs=0;
   requestAnimationFrame(loop);
@@ -990,7 +1058,7 @@ $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.stat
   playing=!playing;lastTs=0;
   if(curT>=chart.duration){curT=0;resyncSounds();}$('play').textContent=playing?'⏸ Pause':'▶ Play';};
 $('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();$('play').textContent='▶ Play';frame(false);};
-$('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();frame(true);drawMini(chart,curT);updateLabel();};
+$('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();resetJudgments();frame(true);drawMini(chart,curT);updateLabel();};
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
 $('noteSpeed').oninput=e=>{noteSpeed=parseFloat(e.target.value);NLEAD=4.0/noteSpeed;$('noteSpeedVal').textContent=noteSpeed.toFixed(2);frame(true);};
@@ -1008,6 +1076,7 @@ $('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))$('settingsModal
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
 $('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
+$('autoMode').onchange=e=>{autoMode=e.target.checked;resetJudgments();frame(true);};
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
@@ -1017,7 +1086,7 @@ function canvasPos(e){const r=cv.getBoundingClientRect();
 let mouseHeld=false;
 cv.addEventListener('pointerdown',e=>{mouseHeld=true;
   if(cv.setPointerCapture)cv.setPointerCapture(e.pointerId);
-  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};triggerInput([pointerInput]);frame(true);});
+  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};const lit=triggerInput([pointerInput]);judgeInput(lit);frame(true);});
 cv.addEventListener('pointermove',e=>{if(!mouseHeld)return;
   const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};triggerInput([pointerInput]);frame(true);});
 window.addEventListener('pointerup',()=>{mouseHeld=false;clearInput();frame(true);});
@@ -1032,6 +1101,7 @@ const SAMPLE=`&title=Slide Showcase
 1^4[4:1],
 8<4[4:1],
 1>5[4:1],
+6v4[4:1],
 2V46[4:1],
 8p4[8:1],
 8q4[8:1],
