@@ -140,15 +140,6 @@
     <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
       <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
     </label>
-    <label class="fld" style="margin-top:10px">Chevron width <span id="chevWidthVal">1.00×</span>
-      <input id="chevWidth" type="range" min="0.3" max="3" step="0.05" value="1">
-    </label>
-    <label class="fld" style="margin-top:10px">Chevron h-width <span id="chevHWidthVal">1.00×</span>
-      <input id="chevHWidth" type="range" min="0.3" max="3" step="0.05" value="1">
-    </label>
-    <label class="fld" style="margin-top:10px">Chevron length <span id="chevLengthVal">1.00×</span>
-      <input id="chevLength" type="range" min="0.3" max="3" step="0.05" value="1">
-    </label>
     <label class="fld" style="margin-top:10px">Chevron spacing <span id="chevSpacingVal">1.00×</span>
       <input id="chevSpacing" type="range" min="0.3" max="3" step="0.05" value="1">
     </label>
@@ -289,6 +280,11 @@ function ptGap(p,r){const a=gapAngle(p);return{x:CX+Math.sin(a)*r,y:CY-Math.cos(
 const wrap8=p=>((p-1+8)%8)+1;
 // Approach radius (in pixels): notes travel from the inner spawn out to the outer ring.
 function approachRadius(u){const s=RING*INNER;return s+(R_OUTER-s)*clamp01(u);}
+// Radius for a note/star that keeps flying outward past the ring (no dwell):
+// spawn -> ring by T, then continues at the same speed.
+function flyRadius(t,T,lead){const s=RING*INNER;
+  if(t<=T)return approachRadius(travelU(t,T,lead));
+  return R_OUTER+((R_OUTER-s)/(0.8*lead))*(t-T);}
 function approachU(t,T,lead){return (t-(T-lead))/lead;}
 
 function lerp(a,b,u){return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};}
@@ -414,10 +410,10 @@ const A_HALFW = RING*0.23;        // half tangential width of an A rectangle
 function touchPoint(note){
   const area=note.area;
   if(area==='C')return{x:CX,y:CY};
-  if(area==='A')return ptOnRing(note.pos,R_OUTER);
+  if(area==='A')return ptOnRing(note.pos,(R_A_IN+R_OUTER)/2);   // centre of the A sensor
   if(area==='B')return ptOnRing(note.pos,R_B);
   if(area==='E')return ptGap(note.pos,R_E);
-  if(area==='D')return ptGap(note.pos,(R_A_IN+R_OUTER)/2); // gap between A sensors
+  if(area==='D')return ptGap(note.pos,(R_A_IN+R_OUTER)/2);      // same distance as A
   return{x:CX,y:CY};
 }
 
@@ -545,10 +541,7 @@ let activeSensors=new Set();
 let pointerInput=null;              // {x,y,r} drawn while the mouse is held
 let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
-let chevWidth=1.0;                 // Settings: chevron line thickness (base 2.2)
-let chevHWidth=1.0;                // Settings: chevron horizontal width / span
-let chevLength=1.0;                // Settings: chevron length (base 0.8)
-let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8)
+let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8); chevron SIZE follows Note size
 const INPUT_R=RING*0.06;           // radius of one input "finger"
 function triggerInput(inputs){
   const set=new Set();
@@ -615,11 +608,13 @@ function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4
 function drawTap(p,col,brk,ex,sc){
   const r=NOTE_R*(sc==null?1:sc), TAU=Math.PI*2;
   ctx.save();
+  if(ex){ctx.shadowColor='#ffffff';ctx.shadowBlur=W*0.022;}   // EX notes shine bright
   ctx.beginPath();
   ctx.arc(p.x,p.y,r,0,TAU);
   ctx.arc(p.x,p.y,r*0.52,0,TAU,true);   // hole
   ctx.fillStyle=col;ctx.fill('evenodd');
-  ctx.lineWidth=ex?3.5:3;ctx.strokeStyle='#ffffff';      // crisp white outline
+  ctx.shadowBlur=0;
+  ctx.lineWidth=ex?5:3;ctx.strokeStyle='#ffffff';      // crisp white outline (thicker + glowing for EX)
   ctx.beginPath();ctx.arc(p.x,p.y,r,0,TAU);ctx.stroke();
   ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,TAU);ctx.stroke();
   ctx.restore();
@@ -648,22 +643,25 @@ function drawHold(angle,rTail,rHead,col,brk,ex,sc){
 function drawStar(p,col,rot,sc,alpha){
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
   if(alpha!=null)ctx.globalAlpha=clamp01(alpha);
-  const R=NOTE_R*1.25*(sc==null?1:sc),r=R*0.5;
+  const R=NOTE_R*1.0*(sc==null?1:sc),r=R*0.5;   // ~tap-note size
   ctx.lineJoin='round';ctx.lineCap='round';
-  ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.016;   // shadow (not white outline)
-  ctx.strokeStyle=col;ctx.lineWidth=R*0.32;
-  ctx.beginPath();
-  for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
-    const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-  ctx.closePath();ctx.stroke();
+  const path=()=>{ctx.beginPath();
+    for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
+      const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+    ctx.closePath();};
+  ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=W*0.014;
+  path();ctx.lineWidth=R*0.36+3.5;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
+  ctx.shadowBlur=0;
+  path();ctx.lineWidth=R*0.36;ctx.strokeStyle=col;ctx.stroke();
   ctx.restore();
 }
 function drawChevron(p,ang,col,alpha){
-  const wd=W*0.033*chevHWidth, ln=W*0.0104*chevLength, lw=W*0.0176*1.3*chevWidth;   // baked 1.3x default
+  const sc=NOTE_R/NOTE_R0;                              // chevron size follows Note size
+  const wd=W*0.033*sc, ln=W*0.0104*sc, lw=W*0.0176*1.3*sc;
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
   ctx.globalAlpha=alpha==null?1:clamp01(alpha);
   ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.013;   // shadow (not white outline)
+  ctx.shadowColor='rgba(0,0,0,1)';ctx.shadowBlur=W*0.017;   // darker shadow for overlapping slides
   ctx.strokeStyle=col;ctx.lineWidth=lw;
   ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
   ctx.restore();
@@ -673,7 +671,7 @@ function drawChevron(p,ang,col,alpha){
 // 25%, so consecutive starts are staggered by a quarter of one fade. Chevrons
 // are drawn last-to-first so earlier path points (e.g. the 6<4 part of 6<4>6)
 // sit ON TOP of later ones where a chained slide crosses itself.
-function drawChevronTrack(pts,col,sens,clearedIdx,P){
+function drawChevronTrack(pts,col,sens,clearedIdx,P,fade){
   const total=polyLen(pts);if(total<1)return;
   const spacing=W*0.054*chevSpacing;
   const count=Math.max(2,Math.round(total/spacing));
@@ -681,27 +679,28 @@ function drawChevronTrack(pts,col,sens,clearedIdx,P){
   for(let k=count-1;k>=1;k--){                        // draw later points first -> earlier on top
     const u=k/count;
     if(sens && seqIndexAtU(sens.startU,u)<=clearedIdx)continue;   // cleared -> disappear
-    const op=P==null?1:clamp01(P/fd-0.25*(k-1));
+    const op=(P==null?1:clamp01(P/fd-0.25*(k-1)))*(fade==null?1:fade);
     if(op<=0)continue;
     drawChevron(alongPoly(pts,u),tangentAt(pts,u),col,op);
   }
 }
 // W (fan) slide: one wide chevron sweep that grows toward the three endpoints.
-function drawFanTrack(paths,col,clearU,P){
+function drawFanTrack(paths,col,clearU,P,fade){
   const [L,C,R]=paths, steps=Math.max(4,Math.round(16/(chevSpacing*1.8)));   // fan 1.8x sparser
   const fd=1/(1+0.25*Math.max(0,steps-1));
   for(let k=1;k<=steps;k++){
     const u=k/steps;
     if(u<=clearU)continue;                                        // cleared -> disappear
-    const op=P==null?1:clamp01(P/fd-0.25*(k-1));                  // appear one after another
+    const op=(P==null?1:clamp01(P/fd-0.25*(k-1)))*(fade==null?1:fade);   // appear one after another
     if(op<=0)continue;
     const l=alongPoly(L,u), c=alongPoly(C,u), r=alongPoly(R,u);
     const tan=tangentAt(C,u);
-    const ahead=W*0.0104*chevLength*(0.6+u);
+    const sc=NOTE_R/NOTE_R0;
+    const ahead=W*0.0104*sc*(0.6+u);
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
-    const lw=W*0.0176*1.3*chevWidth*(0.8+1.4*u);   // baked 1.3x default
+    const lw=W*0.0176*1.3*sc*(0.8+1.4*u);
     ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=op;
-    ctx.shadowColor='rgba(6,9,16,0.9)';ctx.shadowBlur=W*0.013;   // shadow (not white outline)
+    ctx.shadowColor='rgba(0,0,0,1)';ctx.shadowBlur=W*0.017;   // darker shadow
     ctx.strokeStyle=col;ctx.lineWidth=lw;
     ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
     ctx.restore();
@@ -751,9 +750,9 @@ function drawBoard(){
     ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
     ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
     ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();
-    drawLitSensors();
+    ctx.save();ctx.globalAlpha=0.3;drawLitSensors();ctx.restore();
   } else {
-    drawSensors();
+    ctx.save();ctx.globalAlpha=0.3;drawSensors();ctx.restore();   // sensors + light-ups at ~30%
   }
   drawTargets(ctx);
   if(pointerInput){
@@ -773,10 +772,12 @@ function render(chart,t){
   const slides=chart.notes.filter(n=>n.type==='slide'&&!n.bad).slice()
     .sort((a,b)=>(b.time-a.time)||(_idx.get(b)-_idx.get(a)));
   for(const nt of slides){
-    const T=nt.time, col=noteColor(nt), lead=NLEAD;
+    const T=nt.time, col=noteColor(nt), lead=NLEAD, win=NWIN;
     const delay=nt.delaySec||0, dur=nt.dur||0.3;
     const moveStart=T+delay, moveEnd=moveStart+dur;
-    if(t<T-lead||t>=moveEnd)continue;                 // no dwell at the ring; vanish at moveEnd
+    // With Auto off the slide lingers a hit-window past moveEnd then fades out.
+    const endVis=autoMode?moveEnd:moveEnd+win.good;
+    if(t<T-lead||t>=endVis)continue;
     const moving=t>=moveStart&&t<=moveEnd;
     const prog=clamp01((t-moveStart)/dur);
     const isFan=nt.segs.some(s=>s.shape==='w');
@@ -788,29 +789,30 @@ function render(chart,t){
       nt._sens=slideSensors(nt._pts);
     }
     const spinW=(polyLen(nt._pts)/dur/RING)*2.25;     // star spin (0.75x slower)
-    // Chevron appearance window spans only the star's fly-in time (lead), ending
-    // when the star reaches the button (T). Slide-Showing-Speed (0..1) shifts the
-    // window's start later by SSS*lead; at 1.0 the chevrons all appear at once
-    // exactly when the star is pressed (delay is not counted).
-    // Slider 0..1 maps to effective 0.5..1.0, so SSS=0 behaves like the old SSS=0.5
-    const sssEff=0.5+0.5*slideShowingSpeed;
-    const appearStart=T-lead+sssEff*lead;
-    const appearDur=(1-sssEff)*lead;
+    const sssEff=0.5+0.5*slideShowingSpeed;           // slider 0 == old 0.5
+    const appearStart=T-lead+sssEff*lead, appearDur=(1-sssEff)*lead;
     const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
-    if(t<T) drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
-    else if(t<moveStart){                              // sit at the button, grow, point along path
-      const g=delay>0?clamp01((t-T)/delay):1;
-      const tan=tangentAt(nt._pts,0);
+    const headMiss=!autoMode&&((nt._j&&nt._j.tier==='miss')||(!nt._j&&t>T+win.good));
+    // --- head star (behaves like a tap: flies past the button if unpressed) ---
+    if(t<T){
+      drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
+    }else if(headMiss){
+      const f=t<=T+win.good?1:1-(t-(T+win.good))/0.22;
+      if(f>0)drawStar(ptOnRing(nt.from,flyRadius(t,T,lead)),col,t*spinW,1,f);
+    }else if(t<moveStart){                             // sit at the button, point along path
+      const g=delay>0?clamp01((t-T)/delay):1;const tan=tangentAt(nt._pts,0);
       drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g);
     }
-    const autoIdx=(t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1;
+    // --- track + travelling star; non-auto: no auto-clear, fade out after moveEnd ---
+    const autoIdx=autoMode?((t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1):-1;
     const cleared=clearedIndex(nt._sens,autoIdx);
+    const fade=(!autoMode&&t>moveEnd)?Math.max(0,1-(t-moveEnd)/win.good):1;
     if(isFan){
-      drawFanTrack(nt._paths,col,prog,P);
-      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
+      drawFanTrack(nt._paths,col,autoMode?prog:-1,P,fade);
+      if(moving&&!headMiss)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,fade);}
     }else{
-      drawChevronTrack(nt._pts,col,nt._sens,cleared,P);
-      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
+      drawChevronTrack(nt._pts,col,nt._sens,cleared,P,fade);
+      if(moving&&!headMiss){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,fade);}
     }
   }
   // Pass 2: non-slide notes on top. In Auto each vanishes at its beat; with Auto
@@ -827,18 +829,13 @@ function render(chart,t){
       if(autoMode){
         if(t>=T)continue;
         drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
-      }else if(j&&j.tier!=='miss'){                   // hit -> gone at the hit moment
-        if(t>=j.t)continue;
-        drawTap(ptOnRing(nt.pos,approachRadius(travelU(t,T,lead))),col,nt.break,nt.ex,growU(t,T,lead));
-      }else if((j&&j.tier==='miss')||t>T+win.good){   // missed -> fly past the ring, fading
-        const pp=(t-(T+win.good))/0.22;
-        if(pp>=1)continue;
-        ctx.save();ctx.globalAlpha=Math.max(0,1-pp);
-        drawTap(ptOnRing(nt.pos,R_OUTER*(1+0.4*pp)),col,nt.break,nt.ex,1);
+      }else{
+        if(j&&j.tier!=='miss'&&t>=j.t)continue;       // hit -> gone at the input moment
+        const fade=t<=T+win.good?1:1-(t-(T+win.good))/0.22;   // time-gated, no stale state
+        if(fade<=0)continue;
+        ctx.save();if(fade<1)ctx.globalAlpha=fade;
+        drawTap(ptOnRing(nt.pos,flyRadius(t,T,lead)),col,nt.break,nt.ex,t<T?growU(t,T,lead):1);  // keep flying, no dwell
         ctx.restore();
-      }else{                                          // pending -> reach the ring at T and wait
-        const r=t<T?approachRadius(travelU(t,T,lead)):R_OUTER;
-        drawTap(ptOnRing(nt.pos,r),col,nt.break,nt.ex,t<T?growU(t,T,lead):1);
       }
     }else if(nt.type==='hold'){
       const end=T+nt.dur;
@@ -846,9 +843,7 @@ function render(chart,t){
       const a=posAngle(nt.pos);
       const rHead=approachRadius(travelU(t,T,lead));
       const rTail=approachRadius(travelU(t,end,lead));
-      // greyed once it reaches the button if the first input was not received
-      const startHit=j&&j.tier!=='miss';
-      const hcol=(!autoMode&&t>=T&&!startHit)?GREY:col;
+      const hcol=holdGrey(nt,t)?GREY:col;
       drawHold(a,rTail,rHead,hcol,nt.break,nt.ex,growU(t,T,lead));
     }else if(nt.type==='touch'){
       if(t<T-lead)continue;
@@ -860,9 +855,7 @@ function render(chart,t){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>=end)continue;
       const active=t>=T&&t<=end;
-      const startHit=j&&j.tier!=='miss';
-      const grey=!autoMode&&t>=T&&!startHit;
-      drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire,grey);
+      drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire,holdGrey(nt,t));
     }
   }
 }
@@ -899,16 +892,34 @@ function winFor(nt){return (nt.type==='touch'||nt.type==='touchHold')?TWIN:NWIN;
 function tierFor(dt,win){const a=Math.abs(dt);return a<=win.cp?'cp':a<=win.p?'p':a<=win.great?'great':a<=win.good?'good':'miss';}
 function noteTarget(nt){
   if(nt.type==='touch'||nt.type==='touchHold')return nt.area==='C'?'C':nt.area+nt.pos;
+  if(nt.type==='slide')return 'A'+nt.from;           // slide head
   return 'A'+nt.pos;                                 // tap, hold
 }
-const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold');
-function resetJudgments(){if(chart)for(const n of chart.notes)n._j=null;}
+const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide');
+const HOLD_GAP=NWIN.p;   // un-held time tolerated before a hold loses Perfect (greys)
+function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;}}
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
     if(!isJudgeNote(nt)||nt._j)continue;
     if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
   }
+}
+// While a (touch) hold is active, accumulate the time its sensor was NOT pressed.
+function updateHolds(t,dt){
+  if(autoMode||!chart||dt<=0)return;
+  for(const nt of chart.notes){
+    if(nt.type!=='hold'&&nt.type!=='touchHold')continue;
+    if(t<nt.time||t>nt.time+(nt.dur||0))continue;
+    if(!activeSensors.has(noteTarget(nt)))nt._missHold=(nt._missHold||0)+dt;
+  }
+}
+// A hold is greyed once it reaches the button if its first input was missed or
+// the accumulated un-held time has passed the Perfect-loss threshold.
+function holdGrey(nt,t){
+  if(autoMode||t<nt.time)return false;
+  const startHit=nt._j&&nt._j.tier!=='miss';
+  return !startHit || (nt._missHold||0)>HOLD_GAP;
 }
 // Judge the closest unjudged note on each pressed sensor that is within window.
 function judgeInput(sensorSet){
@@ -920,7 +931,7 @@ function judgeInput(sensorSet){
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
-    if(best)best._j={tier:tierFor(curT-best.time,winFor(best)),t:curT};
+    if(best)best._j={tier:best.ex?'cp':tierFor(curT-best.time,winFor(best)),t:curT};   // EX is always Critical Perfect (or miss)
   }
 }
 
@@ -1001,6 +1012,7 @@ function loop(ts){
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';}
     fireSounds(prevT,curT);
     updateMisses(curT);
+    updateHolds(curT,curT-prevT);
     frame(false);
   }else lastTs=0;
   requestAnimationFrame(loop);
@@ -1056,8 +1068,8 @@ function fireSounds(prev,now){
 /* ============================ wiring ============================ */
 $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
   playing=!playing;lastTs=0;
-  if(curT>=chart.duration){curT=0;resyncSounds();}$('play').textContent=playing?'⏸ Pause':'▶ Play';};
-$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();$('play').textContent='▶ Play';frame(false);};
+  if(curT>=chart.duration){curT=0;resyncSounds();resetJudgments();}$('play').textContent=playing?'⏸ Pause':'▶ Play';};
+$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();resetJudgments();$('play').textContent='▶ Play';frame(false);};
 $('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();resetJudgments();frame(true);drawMini(chart,curT);updateLabel();};
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
@@ -1065,9 +1077,6 @@ $('noteSpeed').oninput=e=>{noteSpeed=parseFloat(e.target.value);NLEAD=4.0/noteSp
 $('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=3.36/touchSpeed;$('touchSpeedVal').textContent=touchSpeed.toFixed(2);frame(true);};
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
-$('chevWidth').oninput=e=>{chevWidth=parseFloat(e.target.value);$('chevWidthVal').textContent=chevWidth.toFixed(2)+'×';frame(true);};
-$('chevHWidth').oninput=e=>{chevHWidth=parseFloat(e.target.value);$('chevHWidthVal').textContent=chevHWidth.toFixed(2)+'×';frame(true);};
-$('chevLength').oninput=e=>{chevLength=parseFloat(e.target.value);$('chevLengthVal').textContent=chevLength.toFixed(2)+'×';frame(true);};
 $('chevSpacing').oninput=e=>{chevSpacing=parseFloat(e.target.value);$('chevSpacingVal').textContent=chevSpacing.toFixed(2)+'×';frame(true);};
 $('showA').onchange=e=>{showA=e.target.checked;frame(true);};
 $('openSettings').onclick=()=>$('settingsModal').classList.add('open');
