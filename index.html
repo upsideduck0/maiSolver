@@ -1187,20 +1187,35 @@ function frame(force){
   render(chart,curT);drawMini(chart,curT);updateCounts();
   if(!force){$('seek').value=curT;updateLabel();}
 }
+let needsRender=false;   // set by input handlers; drained by the rAF loop
 function loop(ts){
-  syncMedia();  // always sync media even when paused so pause immediately stops audio
   if(playing){
     if(!lastTs)lastTs=ts;
     const raw=(ts-lastTs)/1000; lastTs=ts;
     const dt=raw*speed;
-    const prevT=curT;curT+=dt;
-    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();syncMedia();stopAllHoldTones();}
+    const prevT=curT;
+    // When a song is loaded and running, the AUDIO ELEMENT is the master clock:
+    // we read curT from it instead of advancing a free clock and forcing the
+    // audio to follow. Forcing currentTime on a playing element re-seeks it,
+    // which mutes/stutters on iOS Safari every time the clocks drift. Reading
+    // from it means we never re-seek, so playback is smooth.
+    const sa=songAudio;
+    if(sa && !sa.paused && mediaPos()>=0){ curT=sa.currentTime+((chart&&chart.leadSec)||0); }
+    else { curT+=dt; }
+    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();stopAllHoldTones();}
+    syncMedia();   // start / pause / coarse-seek the media toward curT as needed
     fireSounds(prevT,curT);
     updateMisses(curT);
     updateHolds(curT,raw);
     updateParticles(raw);
     frame(false);
-  }else{lastTs=0;if(particles.length){updateParticles(0.016);frame(true);}}
+    needsRender=false;
+  }else{
+    lastTs=0;
+    syncMedia();   // keep media paused and parked at curT
+    if(particles.length){updateParticles(0.016);frame(true);needsRender=false;}
+    else if(needsRender){frame(true);needsRender=false;}   // render input changes when paused
+  }
   requestAnimationFrame(loop);
 }
 
@@ -1355,6 +1370,9 @@ function syncOne(el,slackPlay,slackSeek){
   const want=mediaPos();
   el.playbackRate=Math.min(4,Math.max(0.25,speed));
   if(playing && want>=0){
+    // Only (re)seek when starting from paused or when drift is large. For the
+    // audio element, curT is read FROM it (see loop), so drift stays ~0 and we
+    // never re-seek mid-play — that is what keeps iOS audio from muting.
     if(el.paused){try{el.currentTime=want;}catch(_){}el.play().catch(()=>{});}
     else if(Math.abs(el.currentTime-want)>slackPlay){try{el.currentTime=want;}catch(_){}}
   }else{
@@ -1363,7 +1381,9 @@ function syncOne(el,slackPlay,slackSeek){
     if(Math.abs(el.currentTime-tgt)>slackSeek){try{el.currentTime=tgt;}catch(_){}}
   }
 }
-function syncMedia(){ syncOne(songAudio,0.08,0.05); syncOne(songVideo,0.12,0.05); }
+// Wide play-slack: the audio free-runs as the clock master and is never nudged
+// while in sync; the video is only a visual slave so an occasional small jump is fine.
+function syncMedia(){ syncOne(songAudio,0.30,0.05); syncOne(songVideo,0.25,0.05); }
 function clearMedia(){
   const sa=$('songAudio'), sv=$('songVideo');
   if(sa){sa.pause();sa.removeAttribute('src');sa.load();}
@@ -1497,14 +1517,18 @@ mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
 function canvasPos(e){const r=cv.getBoundingClientRect();
   return{x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)};}
 function pointerArr(){return [...pointers.values()];}
+// IMPORTANT: do NOT render synchronously inside these handlers. A full canvas
+// redraw per touch saturates the main thread, and the browser then coalesces /
+// drops subsequent touches — so a fast trill barely registers. Instead we only
+// update the (cheap) judgment state here and flag a render; the rAF loop draws.
 cv.addEventListener('pointerdown',e=>{e.preventDefault();
   const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
-  const lit=triggerInput(pointerArr());judgeInput(lit);frame(true);});
+  const lit=triggerInput(pointerArr());judgeInput(lit);needsRender=true;});
 cv.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;e.preventDefault();
   const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
-  triggerInput(pointerArr());frame(true);});
+  triggerInput(pointerArr());needsRender=true;});
 function endPointer(e){if(!pointers.delete(e.pointerId))return;
-  triggerInput(pointerArr());if(!pointers.size)clearInput();frame(true);}
+  triggerInput(pointerArr());if(!pointers.size)clearInput();needsRender=true;}
 window.addEventListener('pointerup',endPointer);
 window.addEventListener('pointercancel',endPointer);
 
