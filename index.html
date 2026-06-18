@@ -525,11 +525,19 @@ function slideSensors(pts){
 function seqIndexAtU(startU,u){let idx=0;for(let k=0;k<startU.length;k++){if(startU[k]<=u+1e-6)idx=k;else break;}return idx;}
 // Slide-skipping clear index: a sensor clears if the star reached it or it got
 // input, but only within 2 of the last cleared (skip=1 default).
-function clearedIndex(sens,autoIdx){
-  let cleared=-1;
-  for(let i=0;i<sens.seq.length;i++){
-    const act=(i<=autoIdx)||(lightupsOn&&activeSensors.has(sens.seq[i]));
-    if(act&&(i-cleared)<=2)cleared=i;
+// Persistent high-water mark of cleared chevrons. `prev` is the last value, so
+// clearing only ever advances and a released finger never un-clears anything.
+// We advance from `prev` through active sensors, allowing a small look-ahead
+// (so a skipped sensor still clears) while requiring roughly in-order tracing.
+function clearedIndex(sens,autoIdx,prev){
+  let cleared=(prev==null?-1:prev);
+  if(autoIdx>cleared)cleared=autoIdx;                     // Auto fills up to autoIdx
+  let adv=true;
+  while(adv){
+    adv=false;
+    for(let i=cleared+1;i<sens.seq.length&&i<=cleared+2;i++){
+      if(lightupsOn&&activeSensors.has(sens.seq[i])){cleared=i;adv=true;break;}
+    }
   }
   return cleared;
 }
@@ -792,27 +800,24 @@ function render(chart,t){
     const sssEff=0.5+0.5*slideShowingSpeed;           // slider 0 == old 0.5
     const appearStart=T-lead+sssEff*lead, appearDur=(1-sssEff)*lead;
     const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
-    const headMiss=!autoMode&&((nt._j&&nt._j.tier==='miss')||(!nt._j&&t>T+win.good));
-    // --- head star (behaves like a tap: flies past the button if unpressed) ---
+    // --- star: always plays (approach -> grow at the button -> travel),
+    // independent of input. Only the chevrons respond to input. ---
     if(t<T){
       drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
-    }else if(headMiss){
-      const f=t<=T+win.good?1:1-(t-(T+win.good))/0.22;
-      if(f>0)drawStar(ptOnRing(nt.from,flyRadius(t,T,lead)),col,t*spinW,1,f);
-    }else if(t<moveStart){                             // sit at the button, point along path
+    }else if(t<moveStart){                             // sit at the button, grow, point along path
       const g=delay>0?clamp01((t-T)/delay):1;const tan=tangentAt(nt._pts,0);
       drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g);
     }
-    // --- track + travelling star; non-auto: no auto-clear, fade out after moveEnd ---
+    // --- track: clearing is persistent (cleared chevrons stay gone even after
+    // the input is released); remaining chevrons are cut instantly at endVis ---
     const autoIdx=autoMode?((t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1):-1;
-    const cleared=clearedIndex(nt._sens,autoIdx);
-    const fade=(!autoMode&&t>moveEnd)?Math.max(0,1-(t-moveEnd)/win.good):1;
+    nt._clearMax=clearedIndex(nt._sens,autoIdx,nt._clearMax);
     if(isFan){
-      drawFanTrack(nt._paths,col,autoMode?prog:-1,P,fade);
-      if(moving&&!headMiss)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,fade);}
+      drawFanTrack(nt._paths,col,autoMode?prog:-1,P);
+      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
     }else{
-      drawChevronTrack(nt._pts,col,nt._sens,cleared,P,fade);
-      if(moving&&!headMiss){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,fade);}
+      drawChevronTrack(nt._pts,col,nt._sens,nt._clearMax,P);
+      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
     }
   }
   // Pass 2: non-slide notes on top. In Auto each vanishes at its beat; with Auto
@@ -897,7 +902,7 @@ function noteTarget(nt){
 }
 const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide');
 const HOLD_GAP=NWIN.p;   // un-held time tolerated before a hold loses Perfect (greys)
-function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;}}
+function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._clearMax=-1;}}
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
