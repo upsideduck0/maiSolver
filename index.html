@@ -9,6 +9,7 @@
     --bg:#0c0e16; --panel:#151826; --panel2:#1d2133; --line:#2a2f45;
     --txt:#e8ecf6; --dim:#8b93ad; --accent:#ff3b6b; --slide:#2ec4ff;
     --touch:#2ec4ff; --brk:#ff7a1e; --each:#ffd23b; --hold:#ff5c8a;
+    --zoom:1;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
@@ -17,22 +18,26 @@
   @media(max-width:920px){.wrap{flex-direction:column;height:auto}}
   .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
   .side{flex:1 1 auto;min-width:280px;display:flex;flex-direction:column;gap:14px}
-  .ringwrap{position:relative;display:inline-block;line-height:0;max-width:100%}
+  .ringwrap{position:relative;display:inline-block;line-height:0;max-width:100%;
+    transform:scale(var(--zoom));transform-origin:top center}
   canvas#ring{background:radial-gradient(circle at 50% 50%,#10131f,#080a11);
     border-radius:50%;box-shadow:0 0 0 1px var(--line),0 20px 60px rgba(0,0,0,.5);
-    width:min(72vh,520px);height:min(72vh,520px);max-width:100%;position:relative;z-index:1;
+    width:min(72vh,520px);height:min(72vh,520px);max-width:100%;display:block;
     touch-action:none;user-select:none;-webkit-user-select:none}
-  #songVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-    border-radius:50%;z-index:0;opacity:.45;background:#000;display:none}
+  #songVideo{display:none}
   #songAudio{display:none}
-  .ringwrap.haspv #songVideo{display:block}
-  .ringwrap.haspv canvas#ring{background:transparent;box-shadow:0 0 0 1px var(--line)}
-  .stage:fullscreen,.stage:-webkit-full-screen{background:var(--bg);width:100%;height:100%;justify-content:center}
-  .stage:fullscreen canvas#ring,.stage:-webkit-full-screen canvas#ring{width:min(92vh,92vw);height:min(92vh,92vw)}
-  .stage:fullscreen .transport,.stage:-webkit-full-screen .transport{width:min(92vh,92vw)}
-  .stage:fullscreen .panel,.stage:fullscreen .legend,
-  .stage:-webkit-full-screen .panel,.stage:-webkit-full-screen .legend{display:none}
-  .transport{display:flex;flex-direction:column;gap:10px;width:min(72vh,520px);max-width:100%}
+  /* Fullscreen: toggled via body.fs class (works even where API is unavailable) */
+  body.fs{overflow:hidden}
+  body.fs .wrap{padding:0;gap:0;justify-content:center;align-items:center;
+    height:100vh;min-height:0;flex-direction:column}
+  body.fs .side{display:none}
+  body.fs .stage{gap:6px}
+  body.fs canvas#ring{width:min(90vh,90vw);height:min(90vh,90vw);max-width:none}
+  body.fs .transport{width:min(90vh,90vw)}
+  body.fs .panel,body.fs .legend{display:none}
+  body.fs .fs-ctrl{display:flex!important}
+  body.fs #fullscreen span.lbl{display:none}
+  .transport{display:flex;flex-direction:column;gap:10px;width:calc(min(72vh,520px)*var(--zoom));max-width:100%;transition:width 0.1s}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
@@ -57,21 +62,36 @@
   .mini{width:100%;height:34px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;display:block}
   .speedwrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   input[type=file]{font-size:12px;color:var(--dim)}
+  /* Settings modal with tabs */
   .modal-bg{position:fixed;inset:0;background:rgba(4,6,12,.66);display:none;align-items:center;justify-content:center;z-index:50}
   .modal-bg.open{display:flex}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:340px;max-width:92vw;max-height:86vh;overflow:auto}
-  .modal h2{margin:0 0 14px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;width:370px;max-width:92vw;max-height:86vh;overflow:auto}
+  .modal h2{margin:0 0 10px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
   .modal .x{cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
   .modal .x:hover{color:var(--txt)}
+  .tabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .tab-btn{background:none;border:1px solid transparent;border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;color:var(--dim)}
+  .tab-btn.active{background:var(--panel2);border-color:var(--line);color:var(--txt)}
+  /* Fullscreen overlay controls */
+  .fs-ctrl{display:none;position:fixed;top:10px;left:10px;z-index:200;flex-direction:column;gap:5px}
+  .fs-ctrl button{padding:8px 10px;font-size:18px;line-height:1;border-radius:10px;
+    background:rgba(13,16,26,0.88);border:1px solid var(--line);min-width:36px;text-align:center}
 </style>
 </head>
 <body>
+<!-- Fullscreen overlay controls (top-left, visible only in fullscreen mode) -->
+<div class="fs-ctrl" id="fsCtrl">
+  <button id="fs-play" title="Play/Pause">▶</button>
+  <button id="fs-stop" title="Stop">⏹</button>
+  <button id="fs-settings" title="Settings">⚙</button>
+  <button id="fs-exit" title="Exit Fullscreen">✕</button>
+</div>
 <div class="wrap">
   <div class="stage" id="stage">
     <div class="ringwrap" id="ringwrap">
-      <video id="songVideo" playsinline muted preload="auto"></video>
       <canvas id="ring" width="720" height="720"></canvas>
     </div>
+    <video id="songVideo" playsinline muted preload="auto" style="display:none"></video>
     <audio id="songAudio" preload="auto"></audio>
     <div class="transport">
       <canvas id="mini" class="mini" width="1040" height="34"></canvas>
@@ -92,8 +112,8 @@
           </select>
         </div>
         <label class="chk" style="margin:0 0 0 12px"><input id="autoMode" type="checkbox" checked> Auto</label>
-        <button id="fullscreen" title="Fullscreen" style="margin-left:auto;padding:6px 10px;font-size:13px">⛶ Full</button>
-        <button id="openSettings" title="Settings" style="padding:6px 10px;font-size:13px">⚙ Settings</button>
+        <button id="fullscreen" title="Fullscreen" style="margin-left:auto;padding:6px 10px;font-size:13px">⛶ <span class="lbl">Full</span></button>
+        <button id="openSettings" title="Settings" style="padding:6px 10px;font-size:13px">⚙</button>
       </div>
       <div class="legend">
         <span><i class="dot" style="background:var(--accent)"></i>Tap</span>
@@ -148,28 +168,72 @@
 <div class="modal-bg" id="settingsModal">
   <div class="modal">
     <h2>Settings <span class="x" id="closeSettings">×</span></h2>
-    <label class="fld">Note speed <span id="noteSpeedVal">7.00</span>
-      <input id="noteSpeed" type="range" min="1" max="10" step="0.25" value="7">
-    </label>
-    <label class="fld" style="margin-top:10px">Touch speed <span id="touchSpeedVal">7.00</span>
-      <input id="touchSpeed" type="range" min="1" max="10" step="0.25" value="7">
-    </label>
-    <label class="fld" style="margin-top:10px">Slide showing speed <span id="slideShowVal">0.0</span>
-      <input id="slideShow" type="range" min="0" max="1" step="0.1" value="0">
-    </label>
-    <label class="fld" style="margin-top:10px">Note size <span id="noteSizeVal">1.00×</span>
-      <input id="noteSize" type="range" min="0.5" max="2" step="0.05" value="1">
-    </label>
-    <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
-      <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
-    </label>
-    <label class="fld" style="margin-top:10px">Chevron spacing <span id="chevSpacingVal">1.00×</span>
-      <input id="chevSpacing" type="range" min="0.3" max="3" step="0.05" value="1">
-    </label>
-    <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
-    <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
-    <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds</label>
-    <label class="chk"><input id="showPv" type="checkbox"> Show PV video (pv.mp4) behind playfield</label>
+    <div class="tabs">
+      <button class="tab-btn active" id="tabGameplay">Gameplay</button>
+      <button class="tab-btn" id="tabAudio">Audio</button>
+    </div>
+    <!-- Gameplay tab -->
+    <div id="tabGameplayPane">
+      <label class="fld">Note speed <span id="noteSpeedVal">7.00</span>
+        <input id="noteSpeed" type="range" min="1" max="10" step="0.25" value="7">
+      </label>
+      <label class="fld" style="margin-top:10px">Touch speed <span id="touchSpeedVal">7.00</span>
+        <input id="touchSpeed" type="range" min="1" max="10" step="0.25" value="7">
+      </label>
+      <label class="fld" style="margin-top:10px">Slide showing speed <span id="slideShowVal">0.0</span>
+        <input id="slideShow" type="range" min="0" max="1" step="0.1" value="0">
+      </label>
+      <label class="fld" style="margin-top:10px">Note size <span id="noteSizeVal">1.00×</span>
+        <input id="noteSize" type="range" min="0.5" max="2" step="0.05" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Touch size <span id="touchSizeVal">1.00×</span>
+        <input id="touchSize" type="range" min="0.5" max="2" step="0.05" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Chevron spacing <span id="chevSpacingVal">1.00×</span>
+        <input id="chevSpacing" type="range" min="0.3" max="3" step="0.05" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Play area zoom <span id="zoomVal">1.0×</span>
+        <input id="zoomSlider" type="range" min="0.5" max="1.5" step="0.1" value="1">
+      </label>
+      <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
+      <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
+      <label class="chk"><input id="showPv" type="checkbox"> Show PV video (pv.mp4) behind playfield</label>
+    </div>
+    <!-- Audio tab -->
+    <div id="tabAudioPane" style="display:none">
+      <label class="fld">Master volume <span id="volMasterVal">100%</span>
+        <input id="volMaster" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Music volume <span id="volMusicVal">100%</span>
+        <input id="volMusic" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Guide sound volume <span id="volGuideVal">100%</span>
+        <input id="volGuide" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <p style="font-size:11px;color:var(--dim);margin:12px 0 4px">Hit sound volumes</p>
+      <label class="fld">Tap / Star <span id="volTapVal">100%</span>
+        <input id="volTap" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Break <span id="volBrkVal">100%</span>
+        <input id="volBrk" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Hold <span id="volHoldVal">100%</span>
+        <input id="volHold" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Slide <span id="volSlideVal">100%</span>
+        <input id="volSlide" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Touch <span id="volTouchVal">100%</span>
+        <input id="volTouch" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Touch hold <span id="volTHVal">100%</span>
+        <input id="volTH" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="fld" style="margin-top:8px">Firework <span id="volFwVal">100%</span>
+        <input id="volFw" type="range" min="0" max="1" step="0.01" value="1">
+      </label>
+      <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds on</label>
+    </div>
   </div>
 </div>
 
@@ -776,9 +840,38 @@ function drawTouchHold(p,u,active,holdU,fire,grey){
   ctx.restore();
 }
 
+/* ============================ firework particles ============================ */
+let particles=[];
+function spawnFirework(pt,col){
+  const n=20;
+  for(let i=0;i<n;i++){
+    const ang=Math.random()*Math.PI*2, spd=(0.4+Math.random()*0.8)*RING*1.8;
+    const hue=Math.random()*360;
+    particles.push({x:pt.x,y:pt.y,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,
+      life:1,col:`hsl(${hue},100%,75%)`,r:(2.5+Math.random()*3.5)*(W/720)});
+  }
+}
+function updateParticles(dt){
+  for(const p of particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=RING*2.5*dt;p.life-=dt*2.2;}
+  particles=particles.filter(p=>p.life>0);
+}
+function drawParticles(){
+  for(const p of particles){if(p.life<=0)continue;
+    ctx.save();ctx.globalAlpha=Math.max(0,p.life);
+    ctx.fillStyle=p.col;ctx.beginPath();ctx.arc(p.x,p.y,p.r*p.life,0,7);ctx.fill();
+    ctx.restore();}
+}
+
 /* ============================ frame composition ============================ */
 function drawBoard(){
   ctx.clearRect(0,0,W,H);
+  // Draw PV video directly onto the canvas so it works regardless of z-index.
+  const vid=$('songVideo');
+  if(pvEnabled && vid && vid.readyState>=2){
+    ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
+    ctx.globalAlpha=0.45;ctx.drawImage(vid,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);
+    ctx.globalAlpha=1;ctx.restore();
+  }
   if(sensorImg){
     ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
     ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
@@ -878,10 +971,16 @@ function render(chart,t){
       drawHold(a,rTail,rHead,hcol,nt.break,nt.ex,growU(t,T,lead));
     }else if(nt.type==='touch'){
       if(t<T-lead)continue;
-      if(autoMode){ if(t>=T)continue; }
-      else if(j&&j.tier!=='miss'){ if(t>=j.t)continue; }       // hit -> gone
-      else if((j&&j.tier==='miss')||t>T+win.good)continue;     // missed -> gone after the window
-      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);   // else stay at last state
+      if(autoMode){
+        if(t>=T){
+          if(nt.fire&&!nt._fwSpawned){nt._fwSpawned=true;spawnFirework(touchPoint(nt),col);playHitSound('fw');}
+          continue;
+        }
+      }else if(j&&j.tier!=='miss'){
+        if(!nt._fwSpawned&&nt.fire){nt._fwSpawned=true;spawnFirework(touchPoint(nt),col);playHitSound('fw');}
+        if(t>=j.t)continue;
+      }else if((j&&j.tier==='miss')||t>T+win.good)continue;
+      drawTouch(touchPoint(nt),col,clamp01(approachU(t,T,lead)),nt.fire);
     }else if(nt.type==='touchHold'){
       const end=T+(nt.dur||0);
       if(t<T-lead||t>=end)continue;
@@ -889,6 +988,7 @@ function render(chart,t){
       drawTouchHold(touchPoint(nt),clamp01(approachU(t,T,lead)),active,active?(t-T)/(nt.dur||1):0,nt.fire,holdGrey(nt,t));
     }
   }
+  drawParticles();
 }
 
 /* ============================ mini timeline ============================ */
@@ -928,7 +1028,8 @@ function noteTarget(nt){
 }
 const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide');
 const HOLD_GAP=NWIN.p;   // un-held time tolerated before a hold loses Perfect (greys)
-function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._clearMax=-1;}}
+function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._clearMax=-1;n._fwSpawned=false;}
+  particles=[];}
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
@@ -962,7 +1063,12 @@ function judgeInput(sensorSet){
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
-    if(best)best._j={tier:best.ex?'cp':tierFor(curT-best.time,winFor(best)),t:curT};   // EX is always Critical Perfect (or miss)
+    if(best){best._j={tier:best.ex?'cp':tierFor(curT-best.time,winFor(best)),t:curT};
+      if(best._j.tier!=='miss'){
+        const hs=best.type==='tap'?(best.break?'brk':'tap'):best.type==='hold'?'hold':best.type==='slide'?'slide':best.type==='touch'?'touch':'th';
+        playHitSound(hs);
+      }
+    }
   }
 }
 
@@ -1033,66 +1139,104 @@ function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
-  render(chart,curT);drawMini(chart,curT);updateCounts();syncMedia();
+  render(chart,curT);drawMini(chart,curT);updateCounts();
   if(!force){$('seek').value=curT;updateLabel();}
 }
 function loop(ts){
+  syncMedia();  // always sync media even when paused so pause immediately stops audio
   if(playing){
     if(!lastTs)lastTs=ts;
-    const dt=(ts-lastTs)/1000*speed;lastTs=ts;
+    const raw=(ts-lastTs)/1000; lastTs=ts;
+    const dt=raw*speed;
     const prevT=curT;curT+=dt;
-    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';}
+    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';syncMedia();}
     fireSounds(prevT,curT);
     updateMisses(curT);
-    updateHolds(curT,curT-prevT);
+    updateHolds(curT,raw);
+    updateParticles(raw);
     frame(false);
-  }else lastTs=0;
+  }else{lastTs=0;if(particles.length){updateParticles(0.016);frame(true);}}
   requestAnimationFrame(loop);
 }
 
 /* ============================ sounds ============================ */
-// A single short "tick" generated with WebAudio fires on every tap, slide head
-// (star), hold start/end, touch, and touchHold start/end. Sounds are scheduled
-// from a pre-computed time list and only play during forward playback.
 let audioCtx=null, soundOn=true, soundTimes=[], soundIdx=0;
+// Gain nodes (built lazily when audioCtx is created)
+let masterGain=null, guideGain=null, hitBus=null;
+let hitGains={tap:null,brk:null,hold:null,slide:null,touch:null,th:null,fw:null};
+// Volume levels (0-1), synced to sliders
+const VOL={master:1,music:1,guide:1,tap:1,brk:1,hold:1,slide:1,touch:1,th:1,fw:1};
 function ensureAudio(){
   if(audioCtx)return;
   try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(_){audioCtx=null;}
+  if(!audioCtx)return;
+  masterGain=audioCtx.createGain(); masterGain.gain.value=VOL.master; masterGain.connect(audioCtx.destination);
+  guideGain=audioCtx.createGain(); guideGain.gain.value=VOL.guide; guideGain.connect(masterGain);
+  hitBus=audioCtx.createGain(); hitBus.gain.value=1; hitBus.connect(masterGain);
+  for(const k of Object.keys(hitGains)){hitGains[k]=audioCtx.createGain();hitGains[k].gain.value=VOL[k]||1;hitGains[k].connect(hitBus);}
+  // Wire song audio to masterGain via MediaElementSource
+  const sa=$('songAudio');
+  if(sa&&!sa._wired){try{const src=audioCtx.createMediaElementSource(sa);src.connect(masterGain);sa._wired=true;}catch(_){}}
 }
-function playGuideSound(){
-  if(!soundOn||!audioCtx)return;
+function setVol(key,v){VOL[key]=v;
+  if(key==='master'&&masterGain)masterGain.gain.value=v;
+  else if(key==='music'&&musicGain)musicGain.gain.value=v;
+  else if(key==='guide'&&guideGain)guideGain.gain.value=v;
+  else if(hitGains[key])hitGains[key].gain.value=v;}
+// Synthesize a short sound: osc type, freq, peak, attack, release, dest gain node
+function synth(type,freq,peak,atk,rel,dest){
+  if(!audioCtx||!dest)return;
   const now=audioCtx.currentTime;
   const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-  o.type='triangle'; o.frequency.value=1600;
+  o.type=type; o.frequency.value=freq;
   g.gain.setValueAtTime(0.0001,now);
-  g.gain.exponentialRampToValueAtTime(0.18,now+0.004);
-  g.gain.exponentialRampToValueAtTime(0.0001,now+0.05);
-  o.connect(g).connect(audioCtx.destination);
-  o.start(now); o.stop(now+0.06);
+  g.gain.exponentialRampToValueAtTime(peak,now+atk);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+atk+rel);
+  o.connect(g).connect(dest);
+  o.start(now); o.stop(now+atk+rel+0.02);
 }
+function playGuideSound(){if(!soundOn||!audioCtx||!guideGain)return; synth('triangle',1600,0.18,0.004,0.046,guideGain);}
+// Hit sounds — each note type has a distinct pitch/timbre combination
+function playHitSound(type){
+  if(!audioCtx)return;
+  const gain=hitGains[type in hitGains?type:'tap'];
+  if(!gain)return;
+  switch(type){
+    case 'tap':   synth('sine',1200,0.28,0.003,0.07,gain); break;
+    case 'brk':   synth('sawtooth',400,0.35,0.005,0.18,gain);synth('sine',800,0.22,0.003,0.12,gain); break;
+    case 'hold':  synth('sine',900,0.20,0.008,0.12,gain); break;
+    case 'slide': synth('sine',1000,0.22,0.003,0.09,gain); break;
+    case 'touch': synth('triangle',700,0.18,0.006,0.10,gain); break;
+    case 'th':    synth('sine',600,0.16,0.010,0.15,gain);synth('sine',750,0.10,0.010,0.15,gain); break;
+    case 'fw':    synth('triangle',1400,0.28,0.003,0.08,gain);synth('sine',1800,0.18,0.004,0.12,gain); break;
+  }
+}
+// soundTimes entries: {t, hit} where hit=null means guide-only, else hit sound type key
 function rebuildSoundTimes(){
   soundTimes=[];
   if(!chart)return;
-  if(chart.countInTimes)for(const t of chart.countInTimes)soundTimes.push(t); // 4-beat metronome
+  if(chart.countInTimes)for(const t of chart.countInTimes)soundTimes.push({t,hit:null});
   for(const nt of chart.notes){
     if(nt.bad)continue;
-    if(nt.type==='tap')soundTimes.push(nt.time);                   // tap + star (slideHead)
-    else if(nt.type==='hold'){soundTimes.push(nt.time);soundTimes.push(nt.time+nt.dur);}
-    else if(nt.type==='touch')soundTimes.push(nt.time);
-    else if(nt.type==='touchHold'){soundTimes.push(nt.time);soundTimes.push(nt.time+(nt.dur||0));}
+    const hitType=nt.type==='tap'?(nt.break?'brk':'tap'):nt.type==='hold'?'hold':nt.type==='touch'?(nt.fire?'fw':'touch'):nt.type==='touchHold'?'th':null;
+    if(nt.type==='tap')soundTimes.push({t:nt.time,hit:hitType});
+    else if(nt.type==='hold'){soundTimes.push({t:nt.time,hit:'hold'});soundTimes.push({t:nt.time+nt.dur,hit:'hold'});}
+    else if(nt.type==='touch')soundTimes.push({t:nt.time,hit:hitType});
+    else if(nt.type==='touchHold'){soundTimes.push({t:nt.time,hit:'th'});soundTimes.push({t:nt.time+(nt.dur||0),hit:'th'});}
+    else if(nt.type==='slide'&&!nt.slideHead)soundTimes.push({t:nt.time,hit:'slide'});
   }
-  soundTimes.sort((a,b)=>a-b);
+  soundTimes.sort((a,b)=>a.t-b.t);
   resyncSounds();
 }
 function resyncSounds(){
-  // Binary-search-ish skip to the first sound at or after curT so seeks don't replay past sounds.
   let lo=0,hi=soundTimes.length;
-  while(lo<hi){const mid=(lo+hi)>>1;if(soundTimes[mid]<curT)lo=mid+1;else hi=mid;}
+  while(lo<hi){const mid=(lo+hi)>>1;if(soundTimes[mid].t<curT)lo=mid+1;else hi=mid;}
   soundIdx=lo;
 }
 function fireSounds(prev,now){
-  while(soundIdx<soundTimes.length&&soundTimes[soundIdx]<=now){
-    if(soundTimes[soundIdx]>=prev)playGuideSound();
+  while(soundIdx<soundTimes.length&&soundTimes[soundIdx].t<=now){
+    const e=soundTimes[soundIdx];
+    if(e.t>=prev){playGuideSound();if(autoMode&&e.hit)playHitSound(e.hit);}
     soundIdx++;
   }
 }
@@ -1119,13 +1263,13 @@ function syncOne(el,slackPlay,slackSeek){
 }
 function syncMedia(){ syncOne(songAudio,0.08,0.05); syncOne(songVideo,0.12,0.05); }
 function clearMedia(){
-  if(songAudio){songAudio.pause();songAudio.removeAttribute('src');songAudio.load();}
-  if(songVideo){songVideo.pause();songVideo.removeAttribute('src');songVideo.load();}
+  const sa=$('songAudio'), sv=$('songVideo');
+  if(sa){sa.pause();sa.removeAttribute('src');sa.load();}
+  if(sv){sv.pause();sv.removeAttribute('src');sv.load();}
   songAudio=songVideo=null;
   for(const u of mediaUrls)URL.revokeObjectURL(u); mediaUrls=[];
-  $('ringwrap').classList.remove('haspv');
 }
-// Pick a folder (maidata.txt + track.mp3 [+ pv.mp4]) and load all three.
+let musicGain=null;   // gain node for music (created when audio element is wired)
 async function loadFolder(fileList){
   const files=[...fileList];
   const find=re=>files.find(f=>re.test((f.webkitRelativePath||f.name).toLowerCase()));
@@ -1134,19 +1278,33 @@ async function loadFolder(fileList){
   clearMedia();
   const got=[];
   if(md){ try{$('src').value=await md.text(); loadFromSource(); got.push('maidata.txt'); }catch(e){$('err').textContent='Read error: '+e.message;} }
-  if(mp3){ const u=URL.createObjectURL(mp3);mediaUrls.push(u);
-    songAudio=$('songAudio');songAudio.src=u;songAudio.load();got.push(mp3.name); }
-  if(mp4 && pvEnabled){ const u=URL.createObjectURL(mp4);mediaUrls.push(u);
-    songVideo=$('songVideo');songVideo.src=u;songVideo.load();$('ringwrap').classList.add('haspv');got.push(mp4.name); }
+  if(mp3){
+    ensureAudio();
+    const u=URL.createObjectURL(mp3);mediaUrls.push(u);
+    const sa=$('songAudio');
+    // Re-wire if not yet wired (createMediaElementSource can only be called once per element)
+    if(!sa._wired&&audioCtx){try{
+      musicGain=audioCtx.createGain();musicGain.gain.value=VOL.music;musicGain.connect(masterGain);
+      const src=audioCtx.createMediaElementSource(sa);src.connect(musicGain);sa._wired=true;
+    }catch(_){}}
+    sa.src=u;sa.load();songAudio=sa;got.push(mp3.name);
+  }
+  if(mp4){
+    const u=URL.createObjectURL(mp4);mediaUrls.push(u);
+    const sv=$('songVideo');sv.src=u;sv.load();songVideo=sv;
+    if(pvEnabled)got.push(mp4.name);
+  }
   $('folderInfo').textContent='Loaded: '+(got.join(', ')||'nothing')+(mp4&&!pvEnabled?' (pv.mp4 found — enable "Show PV" in Settings)':'');
   resetTransport();
 }
-let pvEnabled=false;   // Settings: render pv.mp4 behind the playfield
+let pvEnabled=false;
 
 /* ============================ wiring ============================ */
 $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
   playing=!playing;lastTs=0;
-  if(curT>=chart.duration){curT=0;resyncSounds();resetJudgments();}$('play').textContent=playing?'⏸ Pause':'▶ Play';};
+  if(curT>=chart.duration){curT=0;resyncSounds();resetJudgments();}
+  $('play').textContent=playing?'⏸ Pause':'▶ Play';
+  if(typeof syncFsPlay==='function')syncFsPlay();};
 $('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();resetJudgments();$('play').textContent='▶ Play';frame(false);};
 $('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();resetJudgments();frame(true);drawMini(chart,curT);updateLabel();};
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
@@ -1165,17 +1323,38 @@ $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slide
 $('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
 $('autoMode').onchange=e=>{autoMode=e.target.checked;resetJudgments();frame(true);};
 $('folder').onchange=e=>{if(e.target.files&&e.target.files.length)loadFolder(e.target.files);};
-$('showPv').onchange=e=>{pvEnabled=e.target.checked;
-  if(!pvEnabled&&songVideo){songVideo.pause();$('ringwrap').classList.remove('haspv');}
-  else if(pvEnabled&&songVideo){$('ringwrap').classList.add('haspv');}};
-$('fullscreen').onclick=()=>{const el=$('stage');
-  if(document.fullscreenElement||document.webkitFullscreenElement){
-    (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document);
-  }else{
-    (el.requestFullscreen||el.webkitRequestFullscreen||(()=>{})).call(el);
-  }};
-document.addEventListener('fullscreenchange',()=>frame(true));
-document.addEventListener('webkitfullscreenchange',()=>frame(true));
+$('showPv').onchange=e=>{pvEnabled=e.target.checked;frame(true);};
+// Settings tabs
+$('tabGameplay').onclick=()=>{$('tabGameplayPane').style.display='';$('tabAudioPane').style.display='none';$('tabGameplay').classList.add('active');$('tabAudio').classList.remove('active');};
+$('tabAudio').onclick=()=>{$('tabAudioPane').style.display='';$('tabGameplayPane').style.display='none';$('tabAudio').classList.add('active');$('tabGameplay').classList.remove('active');};
+// Zoom
+$('zoomSlider').oninput=e=>{const v=parseFloat(e.target.value);$('zoomVal').textContent=v.toFixed(1)+'×';
+  document.documentElement.style.setProperty('--zoom',v);};
+// Volume sliders
+const volIds={volMaster:'master',volMusic:'music',volGuide:'guide',volTap:'tap',volBrk:'brk',volHold:'hold',volSlide:'slide',volTouch:'touch',volTH:'th',volFw:'fw'};
+for(const [id,key] of Object.entries(volIds)){
+  const el=$(id);if(!el)continue;
+  const valEl=$(id+'Val');
+  el.oninput=e=>{const v=parseFloat(e.target.value);if(valEl)valEl.textContent=Math.round(v*100)+'%';ensureAudio();setVol(key,v);};
+}
+// Fullscreen: toggle body.fs class, also attempt browser fullscreen API (not required)
+let isFull=false;
+function enterFs(){isFull=true;document.body.classList.add('fs');
+  try{(document.documentElement.requestFullscreen||document.documentElement.webkitRequestFullscreen||function(){}).call(document.documentElement);}catch(_){}
+  $('fs-play').textContent=playing?'⏸':'▶';
+}
+function exitFs(){isFull=false;document.body.classList.remove('fs');
+  try{(document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document);}catch(_){}
+}
+$('fullscreen').onclick=()=>{isFull?exitFs():enterFs();};
+$('fs-exit').onclick=exitFs;
+function syncFsPlay(){$('fs-play').textContent=playing?'⏸':'▶';}
+$('fs-play').onclick=()=>{$('play').click();syncFsPlay();};
+$('fs-stop').onclick=()=>{$('stop').click();syncFsPlay();};
+$('fs-settings').onclick=()=>$('settingsModal').classList.add('open');
+document.addEventListener('fullscreenchange',onFsChange);
+document.addEventListener('webkitfullscreenchange',onFsChange);
+function onFsChange(){if(!document.fullscreenElement&&!document.webkitFullscreenElement&&isFull)exitFs();}
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
