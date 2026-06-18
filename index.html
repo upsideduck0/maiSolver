@@ -17,9 +17,21 @@
   @media(max-width:920px){.wrap{flex-direction:column;height:auto}}
   .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
   .side{flex:1 1 auto;min-width:280px;display:flex;flex-direction:column;gap:14px}
+  .ringwrap{position:relative;display:inline-block;line-height:0;max-width:100%}
   canvas#ring{background:radial-gradient(circle at 50% 50%,#10131f,#080a11);
     border-radius:50%;box-shadow:0 0 0 1px var(--line),0 20px 60px rgba(0,0,0,.5);
-    width:min(72vh,520px);height:min(72vh,520px);touch-action:none}
+    width:min(72vh,520px);height:min(72vh,520px);max-width:100%;position:relative;z-index:1;
+    touch-action:none;user-select:none;-webkit-user-select:none}
+  #songVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    border-radius:50%;z-index:0;opacity:.45;background:#000;display:none}
+  #songAudio{display:none}
+  .ringwrap.haspv #songVideo{display:block}
+  .ringwrap.haspv canvas#ring{background:transparent;box-shadow:0 0 0 1px var(--line)}
+  .stage:fullscreen,.stage:-webkit-full-screen{background:var(--bg);width:100%;height:100%;justify-content:center}
+  .stage:fullscreen canvas#ring,.stage:-webkit-full-screen canvas#ring{width:min(92vh,92vw);height:min(92vh,92vw)}
+  .stage:fullscreen .transport,.stage:-webkit-full-screen .transport{width:min(92vh,92vw)}
+  .stage:fullscreen .panel,.stage:fullscreen .legend,
+  .stage:-webkit-full-screen .panel,.stage:-webkit-full-screen .legend{display:none}
   .transport{display:flex;flex-direction:column;gap:10px;width:min(72vh,520px);max-width:100%}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
@@ -55,8 +67,12 @@
 </head>
 <body>
 <div class="wrap">
-  <div class="stage">
-    <canvas id="ring" width="720" height="720"></canvas>
+  <div class="stage" id="stage">
+    <div class="ringwrap" id="ringwrap">
+      <video id="songVideo" playsinline muted preload="auto"></video>
+      <canvas id="ring" width="720" height="720"></canvas>
+    </div>
+    <audio id="songAudio" preload="auto"></audio>
     <div class="transport">
       <canvas id="mini" class="mini" width="1040" height="34"></canvas>
       <div class="row">
@@ -76,7 +92,8 @@
           </select>
         </div>
         <label class="chk" style="margin:0 0 0 12px"><input id="autoMode" type="checkbox" checked> Auto</label>
-        <button id="openSettings" title="Settings" style="margin-left:auto;padding:6px 10px;font-size:13px">⚙ Settings</button>
+        <button id="fullscreen" title="Fullscreen" style="margin-left:auto;padding:6px 10px;font-size:13px">⛶ Full</button>
+        <button id="openSettings" title="Settings" style="padding:6px 10px;font-size:13px">⚙ Settings</button>
       </div>
       <div class="legend">
         <span><i class="dot" style="background:var(--accent)"></i>Tap</span>
@@ -104,6 +121,12 @@
           <select id="diff"></select>
         </label>
       </div>
+      <div class="row" style="margin-top:10px">
+        <label class="fld">Or load a song folder (maidata.txt + track.mp3)
+          <input id="folder" type="file" webkitdirectory directory multiple>
+        </label>
+      </div>
+      <div id="folderInfo" style="font-size:12px;color:var(--dim);margin-top:6px"></div>
       <div class="err" id="err"></div>
     </div>
     <div class="panel">
@@ -146,6 +169,7 @@
     <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
     <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
     <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds</label>
+    <label class="chk"><input id="showPv" type="checkbox"> Show PV video (pv.mp4) behind playfield</label>
   </div>
 </div>
 
@@ -519,6 +543,7 @@ function sensorAt(pt){
 function slideSensors(pts){
   const N=48, seq=[], startU=[]; let prev=null;
   for(let k=0;k<=N;k++){const u=k/N;const s=sensorAt(alongPoly(pts,u));
+    if(s&&s[0]==='D')continue;                            // D sensors never gate slide clearing
     if(s&&s!==prev){seq.push(s);startU.push(u);prev=s;}}
   return {seq,startU};
 }
@@ -546,7 +571,7 @@ function clearedIndex(sens,autoIdx,prev){
 // activeSensors holds the ids currently lit. triggerInput() is the reusable
 // entry point the hand simulation will call later; the mouse just feeds it.
 let activeSensors=new Set();
-let pointerInput=null;              // {x,y,r} drawn while the mouse is held
+let pointers=new Map();             // pointerId -> {x,y,r}; one entry per finger / mouse
 let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
 let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8); chevron SIZE follows Note size
@@ -558,7 +583,7 @@ function triggerInput(inputs){
   activeSensors=set;
   return set;
 }
-function clearInput(){activeSensors=new Set();pointerInput=null;}
+function clearInput(){activeSensors=new Set();pointers.clear();}
 
 // ---- drawing ----
 const LIT_FILL='rgba(150,162,196,0.92)';   // a sensor lit up by input
@@ -763,9 +788,10 @@ function drawBoard(){
     ctx.save();ctx.globalAlpha=0.3;drawSensors();ctx.restore();   // sensors + light-ups at ~30%
   }
   drawTargets(ctx);
-  if(pointerInput){
+  if(pointers.size){
     ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();ctx.restore();
+    for(const p of pointers.values()){ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();ctx.stroke();}
+    ctx.restore();
   }
 }
 function render(chart,t){
@@ -950,6 +976,7 @@ function applyLeadIn(chart, firstSec){
   for(const n of chart.notes) n.time+=shift;
   chart.duration+=shift;
   chart.countInTimes=[0,beat,2*beat,3*beat]; // 4 metronome clicks before notes
+  chart.leadSec=LEAD;                        // seconds between curT=0 and audio position 0
 }
 
 function loadFromSource(){
@@ -1006,7 +1033,7 @@ function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
-  render(chart,curT);drawMini(chart,curT);updateCounts();
+  render(chart,curT);drawMini(chart,curT);updateCounts();syncMedia();
   if(!force){$('seek').value=curT;updateLabel();}
 }
 function loop(ts){
@@ -1070,6 +1097,52 @@ function fireSounds(prev,now){
   }
 }
 
+/* ============================ song media (track.mp3 / pv.mp4) ============================ */
+// A loaded song folder gives an mp3 (and optionally an mp4). Playback stays
+// driven by curT (the rAF clock is the master); the media elements are slaved
+// to it. Their position is curT - chart.leadSec, because the 4-beat count-in
+// happens before the audio's position 0.
+let songAudio=null, songVideo=null, mediaUrls=[];
+function mediaPos(){return curT - (chart&&chart.leadSec ? chart.leadSec : 0);}
+function syncOne(el,slackPlay,slackSeek){
+  if(!el)return;
+  const want=mediaPos();
+  el.playbackRate=Math.min(4,Math.max(0.25,speed));
+  if(playing && want>=0){
+    if(el.paused){try{el.currentTime=want;}catch(_){}el.play().catch(()=>{});}
+    else if(Math.abs(el.currentTime-want)>slackPlay){try{el.currentTime=want;}catch(_){}}
+  }else{
+    if(!el.paused)el.pause();
+    const tgt=Math.max(0,want);
+    if(Math.abs(el.currentTime-tgt)>slackSeek){try{el.currentTime=tgt;}catch(_){}}
+  }
+}
+function syncMedia(){ syncOne(songAudio,0.08,0.05); syncOne(songVideo,0.12,0.05); }
+function clearMedia(){
+  if(songAudio){songAudio.pause();songAudio.removeAttribute('src');songAudio.load();}
+  if(songVideo){songVideo.pause();songVideo.removeAttribute('src');songVideo.load();}
+  songAudio=songVideo=null;
+  for(const u of mediaUrls)URL.revokeObjectURL(u); mediaUrls=[];
+  $('ringwrap').classList.remove('haspv');
+}
+// Pick a folder (maidata.txt + track.mp3 [+ pv.mp4]) and load all three.
+async function loadFolder(fileList){
+  const files=[...fileList];
+  const find=re=>files.find(f=>re.test((f.webkitRelativePath||f.name).toLowerCase()));
+  const md=find(/maidata\.txt$/), mp3=find(/track\.mp3$/)||find(/\.(mp3|ogg|wav|m4a)$/), mp4=find(/pv\.mp4$/)||find(/\.(mp4|webm)$/);
+  if(!md && !mp3){$('folderInfo').textContent='No maidata.txt or audio found in folder.';return;}
+  clearMedia();
+  const got=[];
+  if(md){ try{$('src').value=await md.text(); loadFromSource(); got.push('maidata.txt'); }catch(e){$('err').textContent='Read error: '+e.message;} }
+  if(mp3){ const u=URL.createObjectURL(mp3);mediaUrls.push(u);
+    songAudio=$('songAudio');songAudio.src=u;songAudio.load();got.push(mp3.name); }
+  if(mp4 && pvEnabled){ const u=URL.createObjectURL(mp4);mediaUrls.push(u);
+    songVideo=$('songVideo');songVideo.src=u;songVideo.load();$('ringwrap').classList.add('haspv');got.push(mp4.name); }
+  $('folderInfo').textContent='Loaded: '+(got.join(', ')||'nothing')+(mp4&&!pvEnabled?' (pv.mp4 found — enable "Show PV" in Settings)':'');
+  resetTransport();
+}
+let pvEnabled=false;   // Settings: render pv.mp4 behind the playfield
+
 /* ============================ wiring ============================ */
 $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
   playing=!playing;lastTs=0;
@@ -1091,19 +1164,37 @@ $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
 $('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
 $('autoMode').onchange=e=>{autoMode=e.target.checked;resetJudgments();frame(true);};
+$('folder').onchange=e=>{if(e.target.files&&e.target.files.length)loadFolder(e.target.files);};
+$('showPv').onchange=e=>{pvEnabled=e.target.checked;
+  if(!pvEnabled&&songVideo){songVideo.pause();$('ringwrap').classList.remove('haspv');}
+  else if(pvEnabled&&songVideo){$('ringwrap').classList.add('haspv');}};
+$('fullscreen').onclick=()=>{const el=$('stage');
+  if(document.fullscreenElement||document.webkitFullscreenElement){
+    (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document);
+  }else{
+    (el.requestFullscreen||el.webkitRequestFullscreen||(()=>{})).call(el);
+  }};
+document.addEventListener('fullscreenchange',()=>frame(true));
+document.addEventListener('webkitfullscreenchange',()=>frame(true));
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
-// --- sensor input via mouse (stand-in for the future hand simulation) ---
+// --- sensor input via mouse / multi-touch (each finger is one Pointer) ---
+// Pointer Events unify mouse, pen and touch; every finger arrives as a distinct
+// pointerId, so tracking them in a Map gives full multi-touch on phones.
 function canvasPos(e){const r=cv.getBoundingClientRect();
   return{x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)};}
-let mouseHeld=false;
-cv.addEventListener('pointerdown',e=>{mouseHeld=true;
-  if(cv.setPointerCapture)cv.setPointerCapture(e.pointerId);
-  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};const lit=triggerInput([pointerInput]);judgeInput(lit);frame(true);});
-cv.addEventListener('pointermove',e=>{if(!mouseHeld)return;
-  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};triggerInput([pointerInput]);frame(true);});
-window.addEventListener('pointerup',()=>{mouseHeld=false;clearInput();frame(true);});
+function pointerArr(){return [...pointers.values()];}
+cv.addEventListener('pointerdown',e=>{e.preventDefault();
+  const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
+  const lit=triggerInput(pointerArr());judgeInput(lit);frame(true);});
+cv.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;e.preventDefault();
+  const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
+  triggerInput(pointerArr());frame(true);});
+function endPointer(e){if(!pointers.delete(e.pointerId))return;
+  triggerInput(pointerArr());if(!pointers.size)clearInput();frame(true);}
+window.addEventListener('pointerup',endPointer);
+window.addEventListener('pointercancel',endPointer);
 
 const SAMPLE=`&title=Slide Showcase
 &artist=maiSolver
