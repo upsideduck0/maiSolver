@@ -26,17 +26,24 @@
     touch-action:none;user-select:none;-webkit-user-select:none}
   #songVideo{display:none}
   #songAudio{display:none}
-  /* Fullscreen: toggled via body.fs class (works even where API is unavailable) */
+  /* Play mode: body.fs centers the canvas; body.playing tracks playback state */
   body.fs{overflow:hidden}
   body.fs .wrap{padding:0;gap:0;justify-content:center;align-items:center;
     height:100vh;min-height:0;flex-direction:column}
-  body.fs .side{display:none}
   body.fs .stage{gap:6px}
   body.fs canvas#ring{width:min(90vh,90vw);height:min(90vh,90vw);max-width:none}
   body.fs .transport{width:min(90vh,90vw)}
   body.fs .panel,body.fs .legend{display:none}
   body.fs .fs-ctrl{display:flex!important}
-  body.fs #fullscreen,body.fs #openSettings{display:none}   /* use the top-left overlay instead */
+  body.fs #fullscreen,body.fs #openSettings{display:none}
+  /* Hide play/stop transport buttons in play mode (use fs-ctrl overlay instead) */
+  body.fs #play,body.fs #stop{display:none}
+  /* Seek slider: thin decorative line while playing; interactive when paused */
+  body.playing #seek{height:3px;pointer-events:none;opacity:0.45;cursor:default}
+  /* Side panel inside modal Menus tab */
+  #tabMenusPane>.side{flex:none;min-width:0;gap:10px}
+  /* Wider modal when Menus tab is open */
+  .modal.wide{width:560px}
   .transport{display:flex;flex-direction:column;gap:10px;width:calc(min(72vh,520px)*var(--zoom));max-width:100%;transition:width 0.1s}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
@@ -171,6 +178,7 @@
     <div class="tabs">
       <button class="tab-btn active" id="tabGameplay">Gameplay</button>
       <button class="tab-btn" id="tabAudio">Audio</button>
+      <button class="tab-btn" id="tabMenus">Menus</button>
     </div>
     <!-- Gameplay tab -->
     <div id="tabGameplayPane">
@@ -237,6 +245,8 @@
       </label>
       <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds on</label>
     </div>
+    <!-- Menus tab: sidebar panels are moved here in play mode -->
+    <div id="tabMenusPane" style="display:none"></div>
   </div>
 </div>
 
@@ -1169,7 +1179,7 @@ function updateCounts(){
 }
 function showReports(){const r=(chart&&chart.reports)||[];$('console').textContent=r.length?r.join('\n'):'No reports.';}
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
-function resetTransport(){curT=0;playing=false;$('play').textContent='▶ Play';
+function resetTransport(){curT=0;playing=false;syncPlayState();
   $('seek').max=chart.duration;$('seek').value=0;updateLabel();rebuildSoundTimes();resetJudgments();frame(true);}
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
@@ -1184,7 +1194,7 @@ function loop(ts){
     const raw=(ts-lastTs)/1000; lastTs=ts;
     const dt=raw*speed;
     const prevT=curT;curT+=dt;
-    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';syncMedia();stopAllHoldTones();}
+    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();syncMedia();stopAllHoldTones();}
     fireSounds(prevT,curT);
     updateMisses(curT);
     updateHolds(curT,raw);
@@ -1390,9 +1400,8 @@ $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.stat
   playing=!playing;lastTs=0;
   if(curT>=chart.duration){curT=0;resyncSounds();resetJudgments();}
   if(!playing)stopAllHoldTones();
-  $('play').textContent=playing?'⏸ Pause':'▶ Play';
-  if(typeof syncFsPlay==='function')syncFsPlay();};
-$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();resetJudgments();$('play').textContent='▶ Play';frame(false);};
+  syncPlayState();};
+$('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();resetJudgments();syncPlayState();frame(false);};
 $('seek').oninput=e=>{curT=parseFloat(e.target.value);resyncSounds();resetJudgments();frame(true);drawMini(chart,curT);updateLabel();};
 $('speed').onchange=e=>speed=parseFloat(e.target.value);
 $('load').onclick=loadFromSource;
@@ -1403,8 +1412,6 @@ $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v
 $('chevSpacing').oninput=e=>{chevSpacing=parseFloat(e.target.value);$('chevSpacingVal').textContent=chevSpacing.toFixed(2)+'×';frame(true);};
 $('showA').onchange=e=>{showA=e.target.checked;frame(true);};
 $('openSettings').onclick=()=>$('settingsModal').classList.add('open');
-$('closeSettings').onclick=()=>$('settingsModal').classList.remove('open');
-$('settingsModal').onclick=e=>{if(e.target===$('settingsModal'))$('settingsModal').classList.remove('open');};
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
 $('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
@@ -1412,8 +1419,36 @@ $('autoMode').onchange=e=>{autoMode=e.target.checked;resetJudgments();frame(true
 $('folder').onchange=e=>{if(e.target.files&&e.target.files.length)loadFolder(e.target.files);};
 $('showPv').onchange=e=>{pvEnabled=e.target.checked;frame(true);};
 // Settings tabs
-$('tabGameplay').onclick=()=>{$('tabGameplayPane').style.display='';$('tabAudioPane').style.display='none';$('tabGameplay').classList.add('active');$('tabAudio').classList.remove('active');};
-$('tabAudio').onclick=()=>{$('tabAudioPane').style.display='';$('tabGameplayPane').style.display='none';$('tabAudio').classList.add('active');$('tabGameplay').classList.remove('active');};
+function showSettingsTab(id){
+  const tabs=['tabGameplay','tabAudio','tabMenus'];
+  const panes=['tabGameplayPane','tabAudioPane','tabMenusPane'];
+  tabs.forEach(t=>{$(t).classList.toggle('active',t===id);});
+  panes.forEach((p,i)=>{$(p).style.display=(tabs[i]===id?'':'none');});
+  const modal=$('settingsModal').querySelector('.modal');
+  modal.classList.toggle('wide',id==='tabMenus');
+}
+$('tabGameplay').onclick=()=>showSettingsTab('tabGameplay');
+$('tabAudio').onclick=()=>showSettingsTab('tabAudio');
+$('tabMenus').onclick=()=>{
+  // If not in play mode, sidebar is still in .wrap — move it temporarily
+  if(!isFull){const s=sideEl();if(s)$('tabMenusPane').appendChild(s);}
+  showSettingsTab('tabMenus');
+};
+// Restore sidebar to wrap when closing modal (if not in play mode)
+$('closeSettings').onclick=()=>{
+  $('settingsModal').classList.remove('open');
+  if(!isFull){const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);}
+  $('settingsModal').querySelector('.modal').classList.remove('wide');
+  showSettingsTab('tabGameplay');
+};
+$('settingsModal').onclick=e=>{
+  if(e.target===$('settingsModal')){
+    $('settingsModal').classList.remove('open');
+    if(!isFull){const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);}
+    $('settingsModal').querySelector('.modal').classList.remove('wide');
+    showSettingsTab('tabGameplay');
+  }
+};
 // Zoom
 $('zoomSlider').oninput=e=>{const v=parseFloat(e.target.value);$('zoomVal').textContent=v.toFixed(1)+'×';
   document.documentElement.style.setProperty('--zoom',v);};
@@ -1425,24 +1460,34 @@ for(const [id,key] of Object.entries(volIds)){
   const valEl=$(id+'Val');
   el.oninput=e=>{const v=parseFloat(e.target.value);if(valEl)valEl.textContent=Math.round(v*100)+'%';ensureAudio();setVol(key,v);};
 }
-// Fullscreen: toggle body.fs class, also attempt browser fullscreen API (not required)
+// Play mode: body.fs centres the canvas; no browser fullscreen API used.
 let isFull=false;
-function enterFs(){isFull=true;document.body.classList.add('fs');
-  try{(document.documentElement.requestFullscreen||document.documentElement.webkitRequestFullscreen||function(){}).call(document.documentElement);}catch(_){}
-  $('fs-play').textContent=playing?'⏸':'▶';
+const sideEl=()=>document.querySelector('.side');
+function enterFs(){
+  isFull=true;document.body.classList.add('fs');
+  // Move sidebar into the Menus tab pane
+  const s=sideEl();if(s)$('tabMenusPane').appendChild(s);
+  syncPlayState();
 }
-function exitFs(){isFull=false;document.body.classList.remove('fs');
-  try{(document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document);}catch(_){}
+function exitFs(){
+  isFull=false;document.body.classList.remove('fs');
+  // Return sidebar to main layout
+  const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);
+  // Reset modal to normal width and close Menus view
+  $('settingsModal').querySelector('.modal').classList.remove('wide');
+  showSettingsTab('tabGameplay');
+  syncPlayState();
+}
+function syncPlayState(){
+  document.body.classList.toggle('playing',playing);
+  $('play').textContent=playing?'⏸ Pause':'▶ Play';
+  $('fs-play').textContent=playing?'⏸':'▶';
 }
 $('fullscreen').onclick=()=>{isFull?exitFs():enterFs();};
 $('fs-exit').onclick=exitFs;
-function syncFsPlay(){$('fs-play').textContent=playing?'⏸':'▶';}
-$('fs-play').onclick=()=>{$('play').click();syncFsPlay();};
-$('fs-stop').onclick=()=>{$('stop').click();syncFsPlay();};
+$('fs-play').onclick=()=>{$('play').click();};
+$('fs-stop').onclick=()=>{$('stop').click();};
 $('fs-settings').onclick=()=>$('settingsModal').classList.add('open');
-document.addEventListener('fullscreenchange',onFsChange);
-document.addEventListener('webkitfullscreenchange',onFsChange);
-function onFsChange(){if(!document.fullscreenElement&&!document.webkitFullscreenElement&&isFull)exitFs();}
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
