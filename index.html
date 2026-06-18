@@ -19,7 +19,7 @@
   .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
   .side{flex:1 1 auto;min-width:280px;display:flex;flex-direction:column;gap:14px}
   .ringwrap{position:relative;display:inline-block;line-height:0;max-width:100%;
-    transform:scale(var(--zoom));transform-origin:top center}
+    transform:scale(var(--zoom));transform-origin:center center}
   canvas#ring{background:radial-gradient(circle at 50% 50%,#10131f,#080a11);
     border-radius:50%;box-shadow:0 0 0 1px var(--line),0 20px 60px rgba(0,0,0,.5);
     width:min(72vh,520px);height:min(72vh,520px);max-width:100%;display:block;
@@ -36,7 +36,7 @@
   body.fs .transport{width:min(90vh,90vw)}
   body.fs .panel,body.fs .legend{display:none}
   body.fs .fs-ctrl{display:flex!important}
-  body.fs #fullscreen span.lbl{display:none}
+  body.fs #fullscreen,body.fs #openSettings{display:none}   /* use the top-left overlay instead */
   .transport{display:flex;flex-direction:column;gap:10px;width:calc(min(72vh,520px)*var(--zoom));max-width:100%;transition:width 0.1s}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
@@ -194,6 +194,9 @@
       </label>
       <label class="fld" style="margin-top:10px">Play area zoom <span id="zoomVal">1.0×</span>
         <input id="zoomSlider" type="range" min="0.5" max="1.5" step="0.1" value="1">
+      </label>
+      <label class="fld" style="margin-top:10px">Background brightness <span id="bgBrightVal">1.0</span>
+        <input id="bgBright" type="range" min="0" max="1" step="0.1" value="1">
       </label>
       <label class="chk"><input id="showA" type="checkbox" checked> Show A sensors</label>
       <label class="chk"><input id="lightups" type="checkbox" checked> Sensor light-ups</label>
@@ -702,16 +705,27 @@ function diamondPath(s){ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s,0);ctx.lin
 function octagonPath(s){ctx.beginPath();for(let k=0;k<8;k++){const a=k*Math.PI/4+Math.PI/8;const x=Math.cos(a)*s,y=Math.sin(a)*s;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.closePath();}
 
 // Tap/slide-head: a ring (donut) that is blank in the middle so the sensor map shows through.
+// EX notes get an obvious bright halo: a blurred glowing ring drawn behind.
+function exHalo(p,r,col){
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  ctx.shadowColor=col;ctx.shadowBlur=W*0.05;
+  ctx.strokeStyle=col;ctx.lineWidth=Math.max(3,r*0.22);
+  ctx.beginPath();ctx.arc(p.x,p.y,r*1.12,0,Math.PI*2);ctx.stroke();
+  ctx.beginPath();ctx.arc(p.x,p.y,r*1.12,0,Math.PI*2);ctx.stroke();   // doubled for stronger bloom
+  ctx.shadowColor='#ffffff';ctx.shadowBlur=W*0.03;ctx.strokeStyle='rgba(255,255,255,0.9)';
+  ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,r*1.12,0,Math.PI*2);ctx.stroke();
+  ctx.restore();
+}
 function drawTap(p,col,brk,ex,sc){
   const r=NOTE_R*(sc==null?1:sc), TAU=Math.PI*2;
+  if(ex)exHalo(p,r,col);
   ctx.save();
-  if(ex){ctx.shadowColor='#ffffff';ctx.shadowBlur=W*0.022;}   // EX notes shine bright
   ctx.beginPath();
   ctx.arc(p.x,p.y,r,0,TAU);
   ctx.arc(p.x,p.y,r*0.52,0,TAU,true);   // hole
   ctx.fillStyle=col;ctx.fill('evenodd');
-  ctx.shadowBlur=0;
-  ctx.lineWidth=ex?5:3;ctx.strokeStyle='#ffffff';      // crisp white outline (thicker + glowing for EX)
+  ctx.lineWidth=ex?5:3;ctx.strokeStyle='#ffffff';      // crisp white outline (thicker for EX)
   ctx.beginPath();ctx.arc(p.x,p.y,r,0,TAU);ctx.stroke();
   ctx.beginPath();ctx.arc(p.x,p.y,r*0.52,0,TAU);ctx.stroke();
   ctx.restore();
@@ -737,10 +751,12 @@ function drawHold(angle,rTail,rHead,col,brk,ex,sc){
   drawTap(h,col,brk,ex,sc);
 }
 // Hollow, round-cornered 5-point star (empty middle). rot spins/orients it; alpha optional.
-function drawStar(p,col,rot,sc,alpha){
+function drawStar(p,col,rot,sc,alpha,ex){
+  const R0=NOTE_R*1.0*(sc==null?1:sc);
+  if(ex)exHalo(p,R0,col);
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(rot||0);
   if(alpha!=null)ctx.globalAlpha=clamp01(alpha);
-  const R=NOTE_R*1.0*(sc==null?1:sc),r=R*0.5;   // ~tap-note size
+  const R=R0,r=R*0.5;   // ~tap-note size
   ctx.lineJoin='round';ctx.lineCap='round';
   const path=()=>{ctx.beginPath();
     for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
@@ -865,20 +881,21 @@ function drawParticles(){
 /* ============================ frame composition ============================ */
 function drawBoard(){
   ctx.clearRect(0,0,W,H);
+  const bb=bgBrightness;   // 0..1 multiplier on the whole background layer
   // Draw PV video directly onto the canvas so it works regardless of z-index.
   const vid=$('songVideo');
   if(pvEnabled && vid && vid.readyState>=2){
     ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
-    ctx.globalAlpha=0.45;ctx.drawImage(vid,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);
+    ctx.globalAlpha=0.45*bb;ctx.drawImage(vid,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);
     ctx.globalAlpha=1;ctx.restore();
   }
   if(sensorImg){
-    ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
+    ctx.save();ctx.globalAlpha=bb;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
     ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
-    ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();
-    ctx.save();ctx.globalAlpha=0.3;drawLitSensors();ctx.restore();
+    ctx.save();ctx.globalAlpha=bb;ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();ctx.restore();
+    ctx.save();ctx.globalAlpha=0.3*bb;drawLitSensors();ctx.restore();
   } else {
-    ctx.save();ctx.globalAlpha=0.3;drawSensors();ctx.restore();   // sensors + light-ups at ~30%
+    ctx.save();ctx.globalAlpha=0.3*bb;drawSensors();ctx.restore();   // sensors + light-ups at ~30%
   }
   drawTargets(ctx);
   if(pointers.size){
@@ -919,13 +936,20 @@ function render(chart,t){
     const sssEff=0.5+0.5*slideShowingSpeed;           // slider 0 == old 0.5
     const appearStart=T-lead+sssEff*lead, appearDur=(1-sssEff)*lead;
     const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
-    // --- star: always plays (approach -> grow at the button -> travel),
-    // independent of input. Only the chevrons respond to input. ---
+    // --- star head: approaches like a tap; if not hit (Auto off) it flies past
+    // the button just like a missed tap. The travelling slide below still plays. ---
+    const headHit=nt._j&&nt._j.tier!=='miss';
     if(t<T){
-      drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1);
-    }else if(t<moveStart){                             // sit at the button, grow, point along path
-      const g=delay>0?clamp01((t-T)/delay):1;const tan=tangentAt(nt._pts,0);
-      drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g);
+      drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1,nt.ex);
+    }else if(t<moveStart){
+      if(autoMode||headHit){                           // hit: sit at the button, grow, point along path
+        const g=delay>0?clamp01((t-T)/delay):1;const tan=tangentAt(nt._pts,0);
+        drawStar(ptOnRing(nt.from,R_OUTER),col,tan+Math.PI/2,0.5+0.5*g,0.5+0.5*g,nt.ex);
+      }else{                                           // not hit: fly past like a tap
+        const fade=t<=T+win.good?1:1-(t-(T+win.good))/0.22;
+        if(fade>0){ctx.save();if(fade<1)ctx.globalAlpha=fade;
+          drawStar(ptOnRing(nt.from,flyRadius(t,T,lead)),col,t*spinW,1,1,nt.ex);ctx.restore();}
+      }
     }
     // --- track: clearing is persistent (cleared chevrons stay gone even after
     // the input is released); remaining chevrons are cut instantly at endVis ---
@@ -933,10 +957,10 @@ function render(chart,t){
     nt._clearMax=clearedIndex(nt._sens,autoIdx,nt._clearMax);
     if(isFan){
       drawFanTrack(nt._paths,col,autoMode?prog:-1,P);
-      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1);}
+      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1,nt.ex);}
     }else{
       drawChevronTrack(nt._pts,col,nt._sens,nt._clearMax,P);
-      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1);}
+      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1,nt.ex);}
     }
   }
   // Pass 2: non-slide notes on top. In Auto each vanishes at its beat; with Auto
@@ -1012,6 +1036,7 @@ function drawMini(chart,t){
 let chart=null,playing=false,curT=0,lastTs=0,speed=1;
 let noteSpeed=7.0,touchSpeed=7.0,NLEAD=4.0/7.0,TLEAD=3.36/7.0;  // maimai-style speeds (1-10); touch K calibrated so 7.0 = previous 10.0
 let slideShowingSpeed=0.0;     // 0..1 in 0.1 steps; portion of (lead+delay) skipped before chevrons start to appear
+let bgBrightness=1.0;          // 0..1 multiplier on the background/sensor layer
 let autoMode=true;             // when off, notes must be hit by input or they miss
 const $=id=>document.getElementById(id);
 
@@ -1027,9 +1052,12 @@ function noteTarget(nt){
   return 'A'+nt.pos;                                 // tap, hold
 }
 const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide');
-const HOLD_GAP=NWIN.p;   // un-held time tolerated before a hold loses Perfect (greys)
-function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._clearMax=-1;n._fwSpawned=false;}
-  particles=[];}
+// Per the RemyWiki, a hold/touch-hold keeps its Perfect as long as it is held
+// for at least 80% of its duration; once that's reached, releasing early no
+// longer downgrades (or greys) it.
+const HOLD_SECURE=0.8;
+function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._heldTime=0;n._clearMax=-1;n._fwSpawned=false;}
+  particles=[];stopAllHoldTones();}
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
@@ -1037,21 +1065,28 @@ function updateMisses(t){
     if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
   }
 }
-// While a (touch) hold is active, accumulate the time its sensor was NOT pressed.
+// Track held time vs un-held time during a hold, and drive its sustained tone.
 function updateHolds(t,dt){
-  if(autoMode||!chart||dt<=0)return;
+  if(autoMode||!chart)return;
   for(const nt of chart.notes){
     if(nt.type!=='hold'&&nt.type!=='touchHold')continue;
-    if(t<nt.time||t>nt.time+(nt.dur||0))continue;
-    if(!activeSensors.has(noteTarget(nt)))nt._missHold=(nt._missHold||0)+dt;
+    const end=nt.time+(nt.dur||0), within=t>=nt.time&&t<=end;
+    const held=activeSensors.has(noteTarget(nt));
+    if(within&&dt>0){ if(held)nt._heldTime=(nt._heldTime||0)+dt; else nt._missHold=(nt._missHold||0)+dt; }
+    const startHit=nt._j&&nt._j.tier!=='miss';
+    const sounding=within&&startHit&&held;
+    if(sounding&&!holdTones.has(nt))startHoldTone(nt,nt.type==='touchHold'?'th':'hold');
+    else if(!sounding&&holdTones.has(nt))stopHoldTone(nt);
   }
 }
-// A hold is greyed once it reaches the button if its first input was missed or
-// the accumulated un-held time has passed the Perfect-loss threshold.
+// A hold greys while contact is lost — unless it was never started, or it has
+// already banked 80% of its duration (Perfect secured).
 function holdGrey(nt,t){
   if(autoMode||t<nt.time)return false;
   const startHit=nt._j&&nt._j.tier!=='miss';
-  return !startHit || (nt._missHold||0)>HOLD_GAP;
+  if(!startHit)return true;
+  if((nt._heldTime||0)>=HOLD_SECURE*(nt.dur||1e-9))return false;   // banked enough -> never grey
+  return !activeSensors.has(noteTarget(nt));                        // grey only while not holding
 }
 // Judge the closest unjudged note on each pressed sensor that is within window.
 function judgeInput(sensorSet){
@@ -1149,7 +1184,7 @@ function loop(ts){
     const raw=(ts-lastTs)/1000; lastTs=ts;
     const dt=raw*speed;
     const prevT=curT;curT+=dt;
-    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';syncMedia();}
+    if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;$('play').textContent='▶ Play';syncMedia();stopAllHoldTones();}
     fireSounds(prevT,curT);
     updateMisses(curT);
     updateHolds(curT,raw);
@@ -1161,10 +1196,9 @@ function loop(ts){
 
 /* ============================ sounds ============================ */
 let audioCtx=null, soundOn=true, soundTimes=[], soundIdx=0;
-// Gain nodes (built lazily when audioCtx is created)
-let masterGain=null, guideGain=null, hitBus=null;
+let masterGain=null, guideGain=null, hitBus=null, musicGain=null, noiseBuf=null;
 let hitGains={tap:null,brk:null,hold:null,slide:null,touch:null,th:null,fw:null};
-// Volume levels (0-1), synced to sliders
+const holdTones=new Map();   // note -> {osc,gain} sustained tone while a hold is held
 const VOL={master:1,music:1,guide:1,tap:1,brk:1,hold:1,slide:1,touch:1,th:1,fw:1};
 function ensureAudio(){
   if(audioCtx)return;
@@ -1174,19 +1208,23 @@ function ensureAudio(){
   guideGain=audioCtx.createGain(); guideGain.gain.value=VOL.guide; guideGain.connect(masterGain);
   hitBus=audioCtx.createGain(); hitBus.gain.value=1; hitBus.connect(masterGain);
   for(const k of Object.keys(hitGains)){hitGains[k]=audioCtx.createGain();hitGains[k].gain.value=VOL[k]||1;hitGains[k].connect(hitBus);}
-  // Wire song audio to masterGain via MediaElementSource
+  musicGain=audioCtx.createGain(); musicGain.gain.value=VOL.music; musicGain.connect(masterGain);
+  // 1s of white noise, reused for clap / woody transients
+  const len=audioCtx.sampleRate, b=audioCtx.createBuffer(1,len,audioCtx.sampleRate), d=b.getChannelData(0);
+  for(let i=0;i<len;i++)d[i]=Math.random()*2-1; noiseBuf=b;
+  // Wire song audio through musicGain so the Music slider controls it
   const sa=$('songAudio');
-  if(sa&&!sa._wired){try{const src=audioCtx.createMediaElementSource(sa);src.connect(masterGain);sa._wired=true;}catch(_){}}
+  if(sa&&!sa._wired){try{audioCtx.createMediaElementSource(sa).connect(musicGain);sa._wired=true;}catch(_){}}
 }
 function setVol(key,v){VOL[key]=v;
   if(key==='master'&&masterGain)masterGain.gain.value=v;
   else if(key==='music'&&musicGain)musicGain.gain.value=v;
   else if(key==='guide'&&guideGain)guideGain.gain.value=v;
   else if(hitGains[key])hitGains[key].gain.value=v;}
-// Synthesize a short sound: osc type, freq, peak, attack, release, dest gain node
-function synth(type,freq,peak,atk,rel,dest){
+// One decaying oscillator partial.
+function synth(type,freq,peak,atk,rel,dest,t0){
   if(!audioCtx||!dest)return;
-  const now=audioCtx.currentTime;
+  const now=(t0||audioCtx.currentTime);
   const o=audioCtx.createOscillator(), g=audioCtx.createGain();
   o.type=type; o.frequency.value=freq;
   g.gain.setValueAtTime(0.0001,now);
@@ -1195,35 +1233,82 @@ function synth(type,freq,peak,atk,rel,dest){
   o.connect(g).connect(dest);
   o.start(now); o.stop(now+atk+rel+0.02);
 }
-function playGuideSound(){if(!soundOn||!audioCtx||!guideGain)return; synth('triangle',1600,0.18,0.004,0.046,guideGain);}
-// Hit sounds — each note type has a distinct pitch/timbre combination
+// A short filtered-noise burst (used for clap and the woody guide click).
+function noise(dest,peak,dur,filtType,filtFreq,Q){
+  if(!audioCtx||!dest||!noiseBuf)return;
+  const now=audioCtx.currentTime;
+  const s=audioCtx.createBufferSource(); s.buffer=noiseBuf;
+  const f=audioCtx.createBiquadFilter(); f.type=filtType; f.frequency.value=filtFreq; if(Q)f.Q.value=Q;
+  const g=audioCtx.createGain();
+  g.gain.setValueAtTime(peak,now);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+dur);
+  s.connect(f).connect(g).connect(dest);
+  s.start(now); s.stop(now+dur+0.02);
+}
+// "Starry": a few detuned high partials with quick staggered decays -> sparkle.
+function starry(base,peak,dest){
+  if(!audioCtx||!dest)return;
+  const now=audioCtx.currentTime;
+  synth('sine',base,peak,0.002,0.10,dest,now);
+  synth('sine',base*1.5,peak*0.6,0.002,0.07,dest,now+0.012);
+  synth('sine',base*2.02,peak*0.4,0.002,0.06,dest,now+0.028);
+  synth('triangle',base*3.0,peak*0.22,0.002,0.05,dest,now+0.045);
+}
+// Woody (woodblock): tight band-passed noise click + a short pitched body.
+function woody(dest,peak){
+  if(!audioCtx||!dest)return;
+  noise(dest,peak*0.9,0.03,'bandpass',1100,6);
+  synth('sine',820,peak*0.7,0.002,0.05,dest);
+  synth('sine',1240,peak*0.3,0.002,0.035,dest);
+}
+function playGuideSound(){if(!soundOn||!audioCtx||!guideGain)return; woody(guideGain,0.5);}
+// Hit sounds — distinct timbre per note type.
 function playHitSound(type){
   if(!audioCtx)return;
   const gain=hitGains[type in hitGains?type:'tap'];
   if(!gain)return;
   switch(type){
-    case 'tap':   synth('sine',1200,0.28,0.003,0.07,gain); break;
-    case 'brk':   synth('sawtooth',400,0.35,0.005,0.18,gain);synth('sine',800,0.22,0.003,0.12,gain); break;
-    case 'hold':  synth('sine',900,0.20,0.008,0.12,gain); break;
-    case 'slide': synth('sine',1000,0.22,0.003,0.09,gain); break;
-    case 'touch': synth('triangle',700,0.18,0.006,0.10,gain); break;
-    case 'th':    synth('sine',600,0.16,0.010,0.15,gain);synth('sine',750,0.10,0.010,0.15,gain); break;
-    case 'fw':    synth('triangle',1400,0.28,0.003,0.08,gain);synth('sine',1800,0.18,0.004,0.12,gain); break;
+    case 'tap':   starry(1320,0.30,gain); break;                       // bright, sparkly
+    case 'brk':   starry(1560,0.34,gain); synth('sawtooth',330,0.30,0.005,0.20,gain); break;
+    case 'hold':  starry(1180,0.26,gain); break;                       // starry attack
+    case 'slide': starry(1500,0.30,gain); break;                       // starry slide-start
+    case 'touch': noise(gain,0.5,0.05,'highpass',1400);noise(gain,0.35,0.07,'bandpass',1800,1); break; // small clap
+    case 'th':    noise(gain,0.45,0.05,'highpass',1400); break;        // clap (touch hold)
+    case 'fw':    starry(1700,0.30,gain); synth('sine',2100,0.18,0.004,0.12,gain); break;
   }
 }
-// soundTimes entries: {t, hit} where hit=null means guide-only, else hit sound type key
+// Sustained tone while a hold / touch hold is held; extends its hit sound.
+function startHoldTone(nt,type){
+  if(!audioCtx||holdTones.has(nt))return;
+  const gain=hitGains[type==='th'?'th':'hold']; if(!gain)return;
+  const now=audioCtx.currentTime;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type='sine'; o.frequency.value=type==='th'?330:440;
+  g.gain.setValueAtTime(0.0001,now);
+  g.gain.exponentialRampToValueAtTime(0.10,now+0.02);
+  o.connect(g).connect(gain); o.start(now);
+  holdTones.set(nt,{osc:o,gain:g});
+}
+function stopHoldTone(nt){
+  const h=holdTones.get(nt); if(!h)return; holdTones.delete(nt);
+  if(!audioCtx)return; const now=audioCtx.currentTime;
+  try{h.gain.gain.cancelScheduledValues(now);h.gain.gain.setValueAtTime(Math.max(0.0001,h.gain.gain.value),now);
+    h.gain.gain.exponentialRampToValueAtTime(0.0001,now+0.05);h.osc.stop(now+0.07);}catch(_){}
+}
+function stopAllHoldTones(){for(const nt of [...holdTones.keys()])stopHoldTone(nt);}
+// soundTimes entries: {t, hit, phase, nt}. hit=null means guide tick only.
+// phase 'start'/'end' (with nt) drives the sustained hold tone in auto mode.
 function rebuildSoundTimes(){
   soundTimes=[];
   if(!chart)return;
   if(chart.countInTimes)for(const t of chart.countInTimes)soundTimes.push({t,hit:null});
   for(const nt of chart.notes){
     if(nt.bad)continue;
-    const hitType=nt.type==='tap'?(nt.break?'brk':'tap'):nt.type==='hold'?'hold':nt.type==='touch'?(nt.fire?'fw':'touch'):nt.type==='touchHold'?'th':null;
-    if(nt.type==='tap')soundTimes.push({t:nt.time,hit:hitType});
-    else if(nt.type==='hold'){soundTimes.push({t:nt.time,hit:'hold'});soundTimes.push({t:nt.time+nt.dur,hit:'hold'});}
-    else if(nt.type==='touch')soundTimes.push({t:nt.time,hit:hitType});
-    else if(nt.type==='touchHold'){soundTimes.push({t:nt.time,hit:'th'});soundTimes.push({t:nt.time+(nt.dur||0),hit:'th'});}
-    else if(nt.type==='slide'&&!nt.slideHead)soundTimes.push({t:nt.time,hit:'slide'});
+    if(nt.type==='tap')soundTimes.push({t:nt.time,hit:nt.break?'brk':'tap'});
+    else if(nt.type==='hold'){soundTimes.push({t:nt.time,hit:'hold',phase:'start',nt});soundTimes.push({t:nt.time+nt.dur,phase:'end',nt});}
+    else if(nt.type==='touch')soundTimes.push({t:nt.time,hit:nt.fire?'fw':'touch'});
+    else if(nt.type==='touchHold'){soundTimes.push({t:nt.time,hit:'th',phase:'start',nt});soundTimes.push({t:nt.time+(nt.dur||0),phase:'end',nt});}
+    else if(nt.type==='slide'&&!nt.slideHead)soundTimes.push({t:nt.time+(nt.delaySec||0),hit:'slide'});  // starry on slide START
   }
   soundTimes.sort((a,b)=>a.t-b.t);
   resyncSounds();
@@ -1236,7 +1321,14 @@ function resyncSounds(){
 function fireSounds(prev,now){
   while(soundIdx<soundTimes.length&&soundTimes[soundIdx].t<=now){
     const e=soundTimes[soundIdx];
-    if(e.t>=prev){playGuideSound();if(autoMode&&e.hit)playHitSound(e.hit);}
+    if(e.t>=prev){
+      if(e.phase!=='end')playGuideSound();   // guide tick on everything except hold-end markers
+      if(autoMode){
+        if(e.hit)playHitSound(e.hit);
+        if(e.phase==='start'&&e.nt)startHoldTone(e.nt,e.nt.type==='touchHold'?'th':'hold');
+        if(e.phase==='end'&&e.nt)stopHoldTone(e.nt);
+      }
+    }
     soundIdx++;
   }
 }
@@ -1269,7 +1361,6 @@ function clearMedia(){
   songAudio=songVideo=null;
   for(const u of mediaUrls)URL.revokeObjectURL(u); mediaUrls=[];
 }
-let musicGain=null;   // gain node for music (created when audio element is wired)
 async function loadFolder(fileList){
   const files=[...fileList];
   const find=re=>files.find(f=>re.test((f.webkitRelativePath||f.name).toLowerCase()));
@@ -1279,14 +1370,9 @@ async function loadFolder(fileList){
   const got=[];
   if(md){ try{$('src').value=await md.text(); loadFromSource(); got.push('maidata.txt'); }catch(e){$('err').textContent='Read error: '+e.message;} }
   if(mp3){
-    ensureAudio();
+    ensureAudio();   // wires songAudio -> musicGain (so the Music slider works)
     const u=URL.createObjectURL(mp3);mediaUrls.push(u);
     const sa=$('songAudio');
-    // Re-wire if not yet wired (createMediaElementSource can only be called once per element)
-    if(!sa._wired&&audioCtx){try{
-      musicGain=audioCtx.createGain();musicGain.gain.value=VOL.music;musicGain.connect(masterGain);
-      const src=audioCtx.createMediaElementSource(sa);src.connect(musicGain);sa._wired=true;
-    }catch(_){}}
     sa.src=u;sa.load();songAudio=sa;got.push(mp3.name);
   }
   if(mp4){
@@ -1303,6 +1389,7 @@ let pvEnabled=false;
 $('play').onclick=()=>{if(!chart)return;ensureAudio();if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume();
   playing=!playing;lastTs=0;
   if(curT>=chart.duration){curT=0;resyncSounds();resetJudgments();}
+  if(!playing)stopAllHoldTones();
   $('play').textContent=playing?'⏸ Pause':'▶ Play';
   if(typeof syncFsPlay==='function')syncFsPlay();};
 $('stop').onclick=()=>{playing=false;curT=0;lastTs=0;resyncSounds();resetJudgments();$('play').textContent='▶ Play';frame(false);};
@@ -1330,6 +1417,7 @@ $('tabAudio').onclick=()=>{$('tabAudioPane').style.display='';$('tabGameplayPane
 // Zoom
 $('zoomSlider').oninput=e=>{const v=parseFloat(e.target.value);$('zoomVal').textContent=v.toFixed(1)+'×';
   document.documentElement.style.setProperty('--zoom',v);};
+$('bgBright').oninput=e=>{bgBrightness=parseFloat(e.target.value);$('bgBrightVal').textContent=bgBrightness.toFixed(1);frame(true);};
 // Volume sliders
 const volIds={volMaster:'master',volMusic:'music',volGuide:'guide',volTap:'tap',volBrk:'brk',volHold:'hold',volSlide:'slide',volTouch:'touch',volTH:'th',volFw:'fw'};
 for(const [id,key] of Object.entries(volIds)){
