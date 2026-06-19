@@ -652,7 +652,7 @@ function clearedIndex(sens,autoIdx,prev){
 // activeSensors holds the ids currently lit. triggerInput() is the reusable
 // entry point the hand simulation will call later; the mouse just feeds it.
 let activeSensors=new Set();
-let pointers=new Map();             // pointerId -> {x,y,r}; one entry per finger / mouse
+let pointerInput=null;              // {x,y,r} drawn while the mouse/finger is held
 let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
 let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8); chevron SIZE follows Note size
@@ -665,7 +665,7 @@ function sensorsFor(inputs){
   return set;
 }
 function triggerInput(inputs){activeSensors=sensorsFor(inputs);return activeSensors;}
-function clearInput(){activeSensors=new Set();pointers.clear();}
+function clearInput(){activeSensors=new Set();pointerInput=null;}
 
 // ---- drawing ----
 const LIT_FILL='rgba(150,162,196,0.92)';   // a sensor lit up by input
@@ -897,6 +897,37 @@ function drawParticles(){
     ctx.restore();}
 }
 
+/* ============================ hand solver ============================ */
+// Two hands play the chart in manual mode. Left is blue, right is purple/pink
+// (Arcaea "sky" palette). Their resting position sits just outside the play
+// area, level with the centre, next to the leftmost D sensor (D7, west) and the
+// rightmost D sensor (D3, east). Movement/assignment logic comes next; for now
+// the hands sit at rest so the placement can be verified.
+const HAND_R = RING*0.075;                       // hand marker radius
+const HAND_COL = {L:'#3aa0ff', R:'#c060ff'};      // L blue, R purple/pink
+const HAND_REST_RAD = R_OUTER + RING*0.02;        // just outside the outer ring
+const handRest = {
+  L:{x:CX - HAND_REST_RAD, y:CY},                 // west, beside D7
+  R:{x:CX + HAND_REST_RAD, y:CY},                 // east, beside D3
+};
+const hands = {
+  L:{x:handRest.L.x, y:handRest.L.y},
+  R:{x:handRest.R.x, y:handRest.R.y},
+};
+function drawHands(){
+  if(autoMode)return;                             // hands play only in manual mode
+  const one=(h,col)=>{
+    ctx.save();
+    ctx.beginPath();ctx.arc(h.x,h.y,HAND_R,0,7);
+    ctx.fillStyle=col+'33';ctx.fill();            // translucent body
+    ctx.lineWidth=Math.max(3,HAND_R*0.2);ctx.strokeStyle=col;ctx.stroke();
+    ctx.beginPath();ctx.arc(h.x,h.y,HAND_R*0.26,0,7);ctx.fillStyle=col;ctx.fill();  // core dot
+    ctx.restore();
+  };
+  one(hands.L,HAND_COL.L);
+  one(hands.R,HAND_COL.R);
+}
+
 /* ============================ frame composition ============================ */
 // The resting board (sensor outlines / PNG + ring) never changes during play, so
 // it is rendered ONCE to an offscreen canvas and blitted each frame instead of
@@ -934,9 +965,10 @@ function drawBoard(){
   ctx.save();ctx.globalAlpha=boardImgMode?bb:0.3*bb;ctx.drawImage(boardCanvas,0,0);ctx.restore();
   ctx.save();ctx.globalAlpha=0.3*bb;drawLitSensors();ctx.restore();   // dynamic light-ups
   drawTargets(ctx);
-  if(pointers.size){
+  drawHands();
+  if(pointerInput){
     ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
-    for(const p of pointers.values()){ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();ctx.stroke();}
+    ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();
     ctx.restore();
   }
 }
@@ -1214,19 +1246,6 @@ function frame(force){
   if(!force){$('seek').value=curT;updateLabel();}
 }
 let needsRender=false;   // set by input handlers; drained by the rAF loop
-function processInput(){
-  // Run once per rAF frame. Sensor hit-testing and judgment are too expensive
-  // for touch event handlers (they block touch delivery). By doing them here:
-  //   1. getBoundingClientRect() is never called in a touch handler
-  //   2. curT is rAF-fresh when notes are judged (better timing accuracy)
-  //   3. sound playback doesn't stutter due to event-handler congestion
-  triggerInput(pointerArr());            // recompute activeSensors from current fingers
-  if(newFingers.length){
-    const ns=sensorsFor(newFingers);     // sensors for fingers that just went down
-    newFingers.length=0;
-    judgeInput(ns);                      // judge with fresh curT
-  }
-}
 function loop(ts){
   if(playing){
     if(!lastTs)lastTs=ts;
@@ -1243,7 +1262,6 @@ function loop(ts){
     else { curT+=dt; }
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();stopAllHoldTones();}
     syncMedia();   // start / pause / coarse-seek the media toward curT as needed
-    processInput();
     fireSounds(prevT,curT);
     updateMisses(curT);
     updateHolds(curT,raw);
@@ -1253,7 +1271,6 @@ function loop(ts){
   }else{
     lastTs=0;
     syncMedia();   // keep media paused and parked at curT
-    processInput();
     if(particles.length){updateParticles(0.016);frame(true);needsRender=false;}
     else if(needsRender){frame(true);needsRender=false;}   // render input changes when paused
   }
@@ -1552,63 +1569,21 @@ $('fs-settings').onclick=()=>$('settingsModal').classList.add('open');
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
-// --- sensor input ---
-// Single code path: Pointer Events for all input types (touch, mouse, pen).
-// No Touch Events — touch-action:none on the canvas is enough to suppress
-// browser pan/zoom and get immediate pointerdown delivery on all platforms.
-//
-// setPointerCapture ensures pointerup/cancel always arrive at the canvas even
-// when the finger slides off it, eliminating stuck-finger state.
-//
-// All heavy work (sensor mapping, judgment) runs in processInput() once per
-// rAF frame, not inside these handlers. Handlers are near-zero cost.
-
-function pointerArr(){return[...pointers.values()];}
-
-// Cached canvas rect — refreshed on resize so rawPt is cheap in handlers.
-let cvRect=null;
-function updateCvRect(){cvRect=cv.getBoundingClientRect();}
-window.addEventListener('resize',updateCvRect,{passive:true});
-window.addEventListener('orientationchange',updateCvRect,{passive:true});
-// Defer first measurement to after layout (rAF ensures the canvas is rendered).
-requestAnimationFrame(()=>{updateCvRect();});
-
-function rawPt(clientX,clientY){
-  if(!cvRect)cvRect=cv.getBoundingClientRect();   // lazy fallback
-  return{x:(clientX-cvRect.left)*(W/cvRect.width),
-         y:(clientY-cvRect.top)*(H/cvRect.height),r:INPUT_R};
-}
-
-// newFingers: finger-down coords queued here; drained in processInput() so
-// judgment happens with a fresh curT from the audio clock.
-const newFingers=[];
-
-cv.addEventListener('pointerdown',e=>{
-  e.preventDefault();
-  try{cv.setPointerCapture(e.pointerId);}catch(_){}  // guarantee up/cancel delivery
-  const p=rawPt(e.clientX,e.clientY);
-  pointers.set(e.pointerId,p);
-  newFingers.push(p);
-  needsRender=true;
-},{passive:false});
-
-cv.addEventListener('pointermove',e=>{
-  if(!pointers.has(e.pointerId))return;
-  pointers.set(e.pointerId,rawPt(e.clientX,e.clientY));
-  needsRender=true;
-});
-
-function onPtrEnd(e){
-  if(!pointers.has(e.pointerId))return;
-  pointers.delete(e.pointerId);
-  if(!pointers.size)clearInput();
-  needsRender=true;
-}
-cv.addEventListener('pointerup',onPtrEnd);
-cv.addEventListener('pointercancel',onPtrEnd);
-// Window-level fallback in case capture fails (e.g. element loses focus mid-gesture).
-window.addEventListener('pointerup',onPtrEnd,{passive:true});
-window.addEventListener('pointercancel',onPtrEnd,{passive:true});
+// --- sensor input via mouse / single pointer (stand-in for the hand solver) ---
+// Simple single-pointer input: while held, the pointer lights up the sensors it
+// covers and (in manual mode) judges taps. The hand solver drives activeSensors
+// independently of this. Kept deliberately minimal — no multi-touch.
+let mouseHeld=false;
+function canvasPos(e){const r=cv.getBoundingClientRect();
+  return{x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)};}
+cv.addEventListener('pointerdown',e=>{mouseHeld=true;
+  try{cv.setPointerCapture(e.pointerId);}catch(_){}
+  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};
+  const lit=triggerInput([pointerInput]);judgeInput(lit);needsRender=true;});
+cv.addEventListener('pointermove',e=>{if(!mouseHeld)return;
+  const p=canvasPos(e);pointerInput={x:p.x,y:p.y,r:INPUT_R};
+  triggerInput([pointerInput]);needsRender=true;});
+window.addEventListener('pointerup',()=>{mouseHeld=false;clearInput();needsRender=true;});
 
 const SAMPLE=`&title=Slide Showcase
 &artist=maiSolver
