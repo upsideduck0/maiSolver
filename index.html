@@ -13,7 +13,8 @@
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
-    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    touch-action:none}  /* prevent browser pan/zoom from intercepting canvas touches */
   .wrap{display:flex;gap:16px;padding:16px;height:100%;min-height:100vh}
   @media(max-width:920px){.wrap{flex-direction:column;height:auto}}
   .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
@@ -1214,6 +1215,19 @@ function frame(force){
   if(!force){$('seek').value=curT;updateLabel();}
 }
 let needsRender=false;   // set by input handlers; drained by the rAF loop
+function processInput(){
+  // Run once per rAF frame. Sensor hit-testing and judgment are too expensive
+  // for touch event handlers (they block touch delivery). By doing them here:
+  //   1. getBoundingClientRect() is never called in a touch handler
+  //   2. curT is rAF-fresh when notes are judged (better timing accuracy)
+  //   3. sound playback doesn't stutter due to event-handler congestion
+  triggerInput(pointerArr());            // recompute activeSensors from current fingers
+  if(newFingers.length){
+    const ns=sensorsFor(newFingers);     // sensors for fingers that just went down
+    newFingers.length=0;
+    judgeInput(ns);                      // judge with fresh curT
+  }
+}
 function loop(ts){
   if(playing){
     if(!lastTs)lastTs=ts;
@@ -1230,6 +1244,7 @@ function loop(ts){
     else { curT+=dt; }
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();stopAllHoldTones();}
     syncMedia();   // start / pause / coarse-seek the media toward curT as needed
+    processInput();
     fireSounds(prevT,curT);
     updateMisses(curT);
     updateHolds(curT,raw);
@@ -1239,6 +1254,7 @@ function loop(ts){
   }else{
     lastTs=0;
     syncMedia();   // keep media paused and parked at curT
+    processInput();
     if(particles.length){updateParticles(0.016);frame(true);needsRender=false;}
     else if(needsRender){frame(true);needsRender=false;}   // render input changes when paused
   }
@@ -1538,54 +1554,64 @@ mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
 // --- sensor input ---
-// iOS Safari's Pointer Events are unreliable under rapid multi-touch (it drops
-// pointerdown/up when fingers tap quickly), so on touch devices we read fingers
-// from Touch Events instead — e.touches always lists every finger currently
-// down, so a fast two-hand trill never loses a press. Pointer Events still
-// handle mouse/pen (and desktop), but ignore 'touch' there to avoid double work.
-const TOUCH_DEV = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
-function pointerArr(){return [...pointers.values()];}
-function rectScale(){const r=cv.getBoundingClientRect();return{r,sx:W/r.width,sy:H/r.height};}
-function ptFrom(clientX,clientY,rs){return{x:(clientX-rs.r.left)*rs.sx,y:(clientY-rs.r.top)*rs.sy,r:INPUT_R};}
-// IMPORTANT: never render synchronously in these handlers. A full canvas redraw
-// per touch saturates the main thread, and the browser then drops subsequent
-// touches. We only update the (cheap) judgment state and flag a render.
+// ARCHITECTURE: touch handlers must be near-zero cost so the browser can
+// deliver rapid multi-touch events without throttling or dropping them.
+//   • getBoundingClientRect() in a touch handler forces a synchronous layout
+//     on every event — very slow. We cache cvRect instead.
+//   • Sensor hit-testing (37 polys × fingers) and judgeInput (37 × all notes)
+//     were also in the hot path. They now run once per rAF frame instead.
+// Touch handlers: update pointers map + queue new finger-downs. That's it.
+// Sensor mapping, activeSensors update, and judgment happen in loop().
 
-// Pointer Events: mouse / pen only (touch is handled below on touch devices).
-function canvasPos(e){const rs=rectScale();return ptFrom(e.clientX,e.clientY,rs);}
-cv.addEventListener('pointerdown',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;e.preventDefault();
-  pointers.set(e.pointerId,canvasPos(e));
-  const lit=triggerInput(pointerArr());judgeInput(lit);needsRender=true;});
-cv.addEventListener('pointermove',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;
-  if(!pointers.has(e.pointerId))return;e.preventDefault();
-  pointers.set(e.pointerId,canvasPos(e));
-  triggerInput(pointerArr());needsRender=true;});
-function endPointer(e){if(TOUCH_DEV&&e.pointerType==='touch')return;
-  if(!pointers.delete(e.pointerId))return;
-  triggerInput(pointerArr());if(!pointers.size)clearInput();needsRender=true;}
-window.addEventListener('pointerup',endPointer);
-window.addEventListener('pointercancel',endPointer);
+const TOUCH_DEV = ('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+function pointerArr(){return[...pointers.values()];}
 
-// Touch Events: the reliable multi-touch path on iOS.
-function rebuildTouches(e){
-  const rs=rectScale();pointers.clear();
-  for(const t of e.touches)pointers.set('t'+t.identifier,ptFrom(t.clientX,t.clientY,rs));
+// Cached canvas rect — never call getBoundingClientRect in a touch/pointer handler.
+let cvRect=null;
+function updateCvRect(){cvRect=cv.getBoundingClientRect();}
+updateCvRect();
+window.addEventListener('resize',updateCvRect,{passive:true});
+window.addEventListener('orientationchange',updateCvRect,{passive:true});
+
+function rawPt(clientX,clientY){
+  if(!cvRect)return{x:W/2,y:H/2,r:INPUT_R};
+  return{x:(clientX-cvRect.left)*(W/cvRect.width),
+         y:(clientY-cvRect.top)*(H/cvRect.height),r:INPUT_R};
+}
+
+// newFingers: coords of fingers that just went down this event batch.
+// Drained in loop() so judgment uses a fresh curT (audio-clock accurate).
+const newFingers=[];
+
+// Touch Events (iOS multi-touch — Pointer Events drop events under rapid taps).
+function rebuildFromTouches(e){
+  pointers.clear();
+  for(const t of e.touches)pointers.set('t'+t.identifier,rawPt(t.clientX,t.clientY));
 }
 cv.addEventListener('touchstart',e=>{e.preventDefault();
-  rebuildTouches(e);
-  triggerInput(pointerArr());                 // light up every active sensor
-  // Judge only the newly-pressed fingers so a resting finger never auto-hits.
-  const rs=rectScale(),np=[];
-  for(const t of e.changedTouches)np.push(ptFrom(t.clientX,t.clientY,rs));
-  judgeInput(sensorsFor(np));
+  rebuildFromTouches(e);
+  for(const t of e.changedTouches)newFingers.push(rawPt(t.clientX,t.clientY));
   needsRender=true;},{passive:false});
 cv.addEventListener('touchmove',e=>{e.preventDefault();
-  rebuildTouches(e);triggerInput(pointerArr());needsRender=true;},{passive:false});
-function touchEnd(e){e.preventDefault();
-  rebuildTouches(e);triggerInput(pointerArr());
+  rebuildFromTouches(e);needsRender=true;},{passive:false});
+function onTouchEnd(e){e.preventDefault();
+  rebuildFromTouches(e);if(!pointers.size)clearInput();needsRender=true;}
+cv.addEventListener('touchend',onTouchEnd,{passive:false});
+cv.addEventListener('touchcancel',onTouchEnd,{passive:false});
+
+// Pointer Events: mouse / pen on desktop (skip touch to avoid double-fire).
+function canvasPos(e){return rawPt(e.clientX,e.clientY);}
+cv.addEventListener('pointerdown',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;
+  e.preventDefault();pointers.set(e.pointerId,canvasPos(e));
+  newFingers.push(canvasPos(e));needsRender=true;});
+cv.addEventListener('pointermove',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;
+  if(!pointers.has(e.pointerId))return;e.preventDefault();
+  pointers.set(e.pointerId,canvasPos(e));needsRender=true;});
+function endPointer(e){if(TOUCH_DEV&&e.pointerType==='touch')return;
+  if(!pointers.delete(e.pointerId))return;
   if(!pointers.size)clearInput();needsRender=true;}
-cv.addEventListener('touchend',touchEnd,{passive:false});
-cv.addEventListener('touchcancel',touchEnd,{passive:false});
+window.addEventListener('pointerup',endPointer);
+window.addEventListener('pointercancel',endPointer);
 
 const SAMPLE=`&title=Slide Showcase
 &artist=maiSolver
