@@ -361,7 +361,11 @@ function extractCharts(text){
 }
 
 /* ============================ geometry ============================ */
-const cv=document.getElementById('ring'),ctx=cv.getContext('2d');
+const cv=document.getElementById('ring');
+let ctx=cv.getContext('2d');
+// Temporarily redirect the global 2D context (used by the draw helpers) to
+// another target, e.g. the offscreen board cache. Synchronous only.
+function withCtx(target,fn){const real=ctx;ctx=target;try{fn();}finally{ctx=real;}}
 const W=cv.width,H=cv.height,CX=W/2,CY=H/2;
 const RING=W*0.40;          // outer button-ring radius
 const SENSOR_C=RING*0.20;   // centre (C) octagon size; touch notes match this size
@@ -673,13 +677,13 @@ function strokePolyArr(poly){ctx.beginPath();ctx.moveTo(poly[0].x,poly[0].y);
 // Draw the board: each sensor is filled (dark at rest, lit when active) then
 // outlined, in array order. Because E is built last it paints over A/D where
 // they overlap, hiding the collapsing outlines underneath.
-function drawSensors(){
+function drawSensors(skipLit){
   const senCol='rgba(225,232,250,0.55)', senBright='rgba(235,240,252,0.80)';
   ctx.lineJoin='miter';ctx.lineCap='butt';
   ctx.strokeStyle=senBright;ctx.lineWidth=Math.max(1.6,W*0.0048);
   ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,Math.PI*2);ctx.stroke();
   for(const s of SENSORS){
-    const lit=lightupsOn&&activeSensors.has(s.id);
+    const lit=!skipLit&&lightupsOn&&activeSensors.has(s.id);
     const hidden=(s.kind==='A'&&!showA)||s.kind==='D'; // A can be hidden; D has no resting shape
     if(lit){ctx.save();ctx.shadowColor=SEN_GLOW;ctx.shadowBlur=12;ctx.fillStyle=LIT_FILL;fillPolyArr(s.poly);ctx.restore();}
     else if(!hidden){ctx.fillStyle=SENSOR_FILL;fillPolyArr(s.poly);}
@@ -700,7 +704,7 @@ function drawTargets(g){
     g.fillStyle='rgba(255,255,255,0.9)';g.fill();}
 }
 function buildBoard(){buildSensors();}
-function setSensorImage(src){const im=new Image();im.onload=()=>{sensorImg=im;frame(true);};im.src=src;}
+function setSensorImage(src){const im=new Image();im.onload=()=>{sensorImg=im;rebuildBoardCache();frame(true);};im.src=src;}
 
 /* ============================ note rendering ============================ */
 function noteColor(nt){
@@ -772,9 +776,10 @@ function drawStar(p,col,rot,sc,alpha,ex){
     for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5;const rr=k%2?r:R;
       const x=Math.cos(a)*rr,y=Math.sin(a)*rr;k?ctx.lineTo(x,y):ctx.moveTo(x,y);}
     ctx.closePath();};
-  ctx.shadowColor='rgba(0,0,0,0.95)';ctx.shadowBlur=W*0.014;
-  path();ctx.lineWidth=R*0.36+3.5;ctx.strokeStyle='#ffffff';ctx.stroke();   // white outline
-  ctx.shadowBlur=0;
+  // No shadowBlur (very slow on mobile): a dark underlay + white outline gives the
+  // same separation against the board at a fraction of the cost.
+  path();ctx.lineWidth=R*0.36+6;ctx.strokeStyle='rgba(0,0,0,0.5)';ctx.stroke();   // dark separation
+  path();ctx.lineWidth=R*0.36+3.5;ctx.strokeStyle='#ffffff';ctx.stroke();         // white outline
   path();ctx.lineWidth=R*0.36;ctx.strokeStyle=col;ctx.stroke();
   ctx.restore();
 }
@@ -784,9 +789,11 @@ function drawChevron(p,ang,col,alpha){
   ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ang);
   ctx.globalAlpha=alpha==null?1:clamp01(alpha);
   ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.shadowColor='rgba(0,0,0,1)';ctx.shadowBlur=W*0.017;   // darker shadow for overlapping slides
-  ctx.strokeStyle=col;ctx.lineWidth=lw;
-  ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);ctx.stroke();
+  // A dark underlay stroke replaces the old shadowBlur (shadows are the main
+  // mobile bottleneck) while still separating overlapping slides.
+  const cp=()=>{ctx.beginPath();ctx.moveTo(-ln,-wd);ctx.lineTo(ln,0);ctx.lineTo(-ln,wd);};
+  ctx.strokeStyle='rgba(0,0,0,0.6)';ctx.lineWidth=lw+Math.max(2,W*0.006);cp();ctx.stroke();
+  ctx.strokeStyle=col;ctx.lineWidth=lw;cp();ctx.stroke();
   ctx.restore();
 }
 // Slide track: chevrons appear in order and vanish once cleared. P runs 0..1
@@ -823,9 +830,10 @@ function drawFanTrack(paths,col,clearU,P,fade){
     const apex={x:c.x+Math.cos(tan)*ahead,y:c.y+Math.sin(tan)*ahead};
     const lw=W*0.0176*1.3*sc*(0.8+1.4*u);
     ctx.save();ctx.lineCap='round';ctx.lineJoin='round';ctx.globalAlpha=op;
-    ctx.shadowColor='rgba(0,0,0,1)';ctx.shadowBlur=W*0.017;   // darker shadow
-    ctx.strokeStyle=col;ctx.lineWidth=lw;
-    ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);ctx.stroke();
+    // dark underlay instead of shadowBlur (see drawChevron)
+    const fp=()=>{ctx.beginPath();ctx.moveTo(l.x,l.y);ctx.lineTo(apex.x,apex.y);ctx.lineTo(r.x,r.y);};
+    ctx.strokeStyle='rgba(0,0,0,0.6)';ctx.lineWidth=lw+Math.max(2,W*0.006);fp();ctx.stroke();
+    ctx.strokeStyle=col;ctx.lineWidth=lw;fp();ctx.stroke();
     ctx.restore();
   }
 }
@@ -889,6 +897,26 @@ function drawParticles(){
 }
 
 /* ============================ frame composition ============================ */
+// The resting board (sensor outlines / PNG + ring) never changes during play, so
+// it is rendered ONCE to an offscreen canvas and blitted each frame instead of
+// re-stroking 30+ polygons every time. Brightness is applied at blit time, and
+// the dynamic light-ups / targets / pointers are drawn live on top.
+let boardCanvas=null, boardImgMode=false;
+function rebuildBoardCache(){
+  if(!boardCanvas){boardCanvas=document.createElement('canvas');boardCanvas.width=W;boardCanvas.height=H;}
+  const bctx=boardCanvas.getContext('2d');
+  bctx.clearRect(0,0,W,H);
+  boardImgMode=!!sensorImg;
+  withCtx(bctx,()=>{
+    if(sensorImg){
+      ctx.save();ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
+      ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
+      ctx.save();ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();ctx.restore();
+    } else {
+      drawSensors(true);   // resting board only (skipLit) — light-ups drawn live
+    }
+  });
+}
 function drawBoard(){
   ctx.clearRect(0,0,W,H);
   const bb=bgBrightness;   // 0..1 multiplier on the whole background layer
@@ -899,14 +927,11 @@ function drawBoard(){
     ctx.globalAlpha=0.45*bb;ctx.drawImage(vid,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);
     ctx.globalAlpha=1;ctx.restore();
   }
-  if(sensorImg){
-    ctx.save();ctx.globalAlpha=bb;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.clip();
-    ctx.drawImage(sensorImg,CX-R_OUTER,CY-R_OUTER,R_OUTER*2,R_OUTER*2);ctx.restore();
-    ctx.save();ctx.globalAlpha=bb;ctx.strokeStyle='rgba(150,170,210,.25)';ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R_OUTER,0,7);ctx.stroke();ctx.restore();
-    ctx.save();ctx.globalAlpha=0.3*bb;drawLitSensors();ctx.restore();
-  } else {
-    ctx.save();ctx.globalAlpha=0.3*bb;drawSensors();ctx.restore();   // sensors + light-ups at ~30%
-  }
+  if(!boardCanvas)rebuildBoardCache();
+  // Blit the cached resting board. Image mode uses full brightness; the drawn
+  // sensor outlines use ~30% (matches the original alpha for each path).
+  ctx.save();ctx.globalAlpha=boardImgMode?bb:0.3*bb;ctx.drawImage(boardCanvas,0,0);ctx.restore();
+  ctx.save();ctx.globalAlpha=0.3*bb;drawLitSensors();ctx.restore();   // dynamic light-ups
   drawTargets(ctx);
   if(pointers.size){
     ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
@@ -1430,7 +1455,7 @@ $('touchSpeed').oninput=e=>{touchSpeed=parseFloat(e.target.value);TLEAD=3.36/tou
 $('noteSize').oninput=e=>{const v=parseFloat(e.target.value);NOTE_R=NOTE_R0*v;$('noteSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('touchSize').oninput=e=>{const v=parseFloat(e.target.value);TOUCH_R=TOUCH_R0*v;$('touchSizeVal').textContent=v.toFixed(2)+'×';frame(true);};
 $('chevSpacing').oninput=e=>{chevSpacing=parseFloat(e.target.value);$('chevSpacingVal').textContent=chevSpacing.toFixed(2)+'×';frame(true);};
-$('showA').onchange=e=>{showA=e.target.checked;frame(true);};
+$('showA').onchange=e=>{showA=e.target.checked;rebuildBoardCache();frame(true);};
 $('openSettings').onclick=()=>$('settingsModal').classList.add('open');
 $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
