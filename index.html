@@ -657,13 +657,14 @@ let showA=true;                    // Settings: draw A sensor shapes at rest
 let lightupsOn=true;               // Settings: light sensors up on input
 let chevSpacing=1.0;               // Settings: chevron spacing (base 1.8); chevron SIZE follows Note size
 const INPUT_R=RING*0.06;           // radius of one input "finger"
-function triggerInput(inputs){
+// Map a set of input points to the sensor ids they cover (no side effects).
+function sensorsFor(inputs){
   const set=new Set();
   for(const s of SENSORS) for(const inp of inputs)
     if(sensorHit(s,inp.x,inp.y,inp.r)){set.add(s.id);break;}
-  activeSensors=set;
   return set;
 }
+function triggerInput(inputs){activeSensors=sensorsFor(inputs);return activeSensors;}
 function clearInput(){activeSensors=new Set();pointers.clear();}
 
 // ---- drawing ----
@@ -1536,26 +1537,55 @@ $('fs-settings').onclick=()=>$('settingsModal').classList.add('open');
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
-// --- sensor input via mouse / multi-touch (each finger is one Pointer) ---
-// Pointer Events unify mouse, pen and touch; every finger arrives as a distinct
-// pointerId, so tracking them in a Map gives full multi-touch on phones.
-function canvasPos(e){const r=cv.getBoundingClientRect();
-  return{x:(e.clientX-r.left)*(W/r.width), y:(e.clientY-r.top)*(H/r.height)};}
+// --- sensor input ---
+// iOS Safari's Pointer Events are unreliable under rapid multi-touch (it drops
+// pointerdown/up when fingers tap quickly), so on touch devices we read fingers
+// from Touch Events instead — e.touches always lists every finger currently
+// down, so a fast two-hand trill never loses a press. Pointer Events still
+// handle mouse/pen (and desktop), but ignore 'touch' there to avoid double work.
+const TOUCH_DEV = ('ontouchstart' in window) || (navigator.maxTouchPoints>0);
 function pointerArr(){return [...pointers.values()];}
-// IMPORTANT: do NOT render synchronously inside these handlers. A full canvas
-// redraw per touch saturates the main thread, and the browser then coalesces /
-// drops subsequent touches — so a fast trill barely registers. Instead we only
-// update the (cheap) judgment state here and flag a render; the rAF loop draws.
-cv.addEventListener('pointerdown',e=>{e.preventDefault();
-  const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
+function rectScale(){const r=cv.getBoundingClientRect();return{r,sx:W/r.width,sy:H/r.height};}
+function ptFrom(clientX,clientY,rs){return{x:(clientX-rs.r.left)*rs.sx,y:(clientY-rs.r.top)*rs.sy,r:INPUT_R};}
+// IMPORTANT: never render synchronously in these handlers. A full canvas redraw
+// per touch saturates the main thread, and the browser then drops subsequent
+// touches. We only update the (cheap) judgment state and flag a render.
+
+// Pointer Events: mouse / pen only (touch is handled below on touch devices).
+function canvasPos(e){const rs=rectScale();return ptFrom(e.clientX,e.clientY,rs);}
+cv.addEventListener('pointerdown',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;e.preventDefault();
+  pointers.set(e.pointerId,canvasPos(e));
   const lit=triggerInput(pointerArr());judgeInput(lit);needsRender=true;});
-cv.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;e.preventDefault();
-  const p=canvasPos(e);pointers.set(e.pointerId,{x:p.x,y:p.y,r:INPUT_R});
+cv.addEventListener('pointermove',e=>{if(TOUCH_DEV&&e.pointerType==='touch')return;
+  if(!pointers.has(e.pointerId))return;e.preventDefault();
+  pointers.set(e.pointerId,canvasPos(e));
   triggerInput(pointerArr());needsRender=true;});
-function endPointer(e){if(!pointers.delete(e.pointerId))return;
+function endPointer(e){if(TOUCH_DEV&&e.pointerType==='touch')return;
+  if(!pointers.delete(e.pointerId))return;
   triggerInput(pointerArr());if(!pointers.size)clearInput();needsRender=true;}
 window.addEventListener('pointerup',endPointer);
 window.addEventListener('pointercancel',endPointer);
+
+// Touch Events: the reliable multi-touch path on iOS.
+function rebuildTouches(e){
+  const rs=rectScale();pointers.clear();
+  for(const t of e.touches)pointers.set('t'+t.identifier,ptFrom(t.clientX,t.clientY,rs));
+}
+cv.addEventListener('touchstart',e=>{e.preventDefault();
+  rebuildTouches(e);
+  triggerInput(pointerArr());                 // light up every active sensor
+  // Judge only the newly-pressed fingers so a resting finger never auto-hits.
+  const rs=rectScale(),np=[];
+  for(const t of e.changedTouches)np.push(ptFrom(t.clientX,t.clientY,rs));
+  judgeInput(sensorsFor(np));
+  needsRender=true;},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();
+  rebuildTouches(e);triggerInput(pointerArr());needsRender=true;},{passive:false});
+function touchEnd(e){e.preventDefault();
+  rebuildTouches(e);triggerInput(pointerArr());
+  if(!pointers.size)clearInput();needsRender=true;}
+cv.addEventListener('touchend',touchEnd,{passive:false});
+cv.addEventListener('touchcancel',touchEnd,{passive:false});
 
 const SAMPLE=`&title=Slide Showcase
 &artist=maiSolver
