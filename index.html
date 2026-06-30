@@ -1081,8 +1081,13 @@ const $=id=>document.getElementById(id);
 // maimai DX timing windows (seconds). Touch windows are a bit wider.
 const NWIN={cp:1/60, p:0.05, great:0.10, good:0.15};
 const TWIN={cp:0.025, p:0.06, great:0.12, good:0.18};
+// Break notes subdivide Perfect and Great into sub-tiers (1 frame = 1/60 s).
+// Boundaries derived from 60 fps frame counts used by the cabinet.
+// CP≤1f  HP≤2f  LP≤3f(=P)  HG≤4f  MG≤5f  LG≤6f(=Gr)  Good≤9f(=Gd)
+const BWIN={cp:1/60, hp:2/60, lp:3/60, hg:4/60, mg:5/60, lg:6/60, good:0.15};
 function winFor(nt){return (nt.type==='touch'||nt.type==='touchHold')?TWIN:NWIN;}
 function tierFor(dt,win){const a=Math.abs(dt);return a<=win.cp?'cp':a<=win.p?'p':a<=win.great?'great':a<=win.good?'good':'miss';}
+function breakTierFor(dt){const a=Math.abs(dt);return a<=BWIN.cp?'cp':a<=BWIN.hp?'hp':a<=BWIN.lp?'lp':a<=BWIN.hg?'hg':a<=BWIN.mg?'mg':a<=BWIN.lg?'lg':a<=BWIN.good?'good':'miss';}
 function noteTarget(nt){
   if(nt.type==='touch'||nt.type==='touchHold')return nt.area==='C'?'C':nt.area+nt.pos;
   if(nt.type==='slide')return 'A'+nt.from;           // slide head
@@ -1140,8 +1145,10 @@ function computeAchievement(){
     if(!nt._j)continue;
     const tier=nt._j.tier;
     if(isBreak){
-      actualBase+=w*({cp:1,p:1,great:0.8,good:0.4,miss:0}[tier]??0);
-      breakScore+=({cp:1,p:0.75,great:0.4,good:0.3,miss:0}[tier]??0);
+      // Base: CP/all-Perfects=1.0, HG=0.8, MG=0.6, LG=0.5, Good=0.4, Miss=0
+      actualBase+=w*({cp:1,hp:1,lp:1,hg:0.8,mg:0.6,lg:0.5,good:0.4,miss:0}[tier]??0);
+      // Bonus pool (×1%): CP=1.0, HP=0.75, LP=0.5, any-Great=0.4, Good=0.3, Miss=0
+      breakScore+=({cp:1,hp:0.75,lp:0.5,hg:0.4,mg:0.4,lg:0.4,good:0.3,miss:0}[tier]??0);
     }else{
       actualBase+=w*({cp:1,p:1,great:0.8,good:0.5,miss:0}[tier]??0);
     }
@@ -1157,12 +1164,15 @@ function drawScore(){
   if(autoMode||!chart)return;
   const a=computeAchievement();
   if(!a)return;
-  // Count judged notes for judgment summary
+  // Count judged notes — fold break sub-tiers into display buckets
   const jc={cp:0,p:0,great:0,good:0,miss:0};
+  // Map every possible tier string to a display bucket
+  const tierBucket={cp:'cp',p:'p',hp:'p',lp:'p',great:'great',hg:'great',mg:'great',lg:'great',good:'good',miss:'miss'};
   let judged=0;
   for(const nt of chart.notes){
     if(!isJudgeNote(nt)||!nt._j)continue;
-    jc[nt._j.tier]=(jc[nt._j.tier]||0)+1;judged++;
+    const b=tierBucket[nt._j.tier]??'miss';
+    jc[b]++;judged++;
   }
   if(!judged)return;  // nothing judged yet — stay silent
   ctx.save();
@@ -1204,7 +1214,8 @@ function judgeInput(sensorSet){
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
-    if(best){best._j={tier:best.ex?'cp':tierFor(curT-best.time,winFor(best)),t:curT};
+    if(best){const isBreakNote=best.type==='tap'&&best.break;
+      best._j={tier:best.ex?'cp':isBreakNote?breakTierFor(curT-best.time):tierFor(curT-best.time,winFor(best)),t:curT};
       if(best._j.tier!=='miss'){
         const hs=best.type==='tap'?(best.break?'brk':'tap'):best.type==='hold'?'hold':best.type==='slide'?'slide':best.type==='touch'?'touch':'th';
         playHitSound(hs);
