@@ -871,29 +871,32 @@ function drawParticles(){
 // area, level with the centre, next to the leftmost D sensor (D7, west) and the
 // rightmost D sensor (D3, east). Movement/assignment logic comes next; for now
 // the hands sit at rest so the placement can be verified.
-const HAND_R = RING*0.075;                       // hand marker radius
+const HAND_R = RING*0.075;                       // hand radius when active/on a note
+// Rest radius is smaller so the hand fits entirely in the gap between R_OUTER (331)
+// and the canvas circle edge (360). RING*0.045≈13px; inner edge = R_OUTER+4, outer<360.
+const HAND_R_REST = RING*0.045;
 const HAND_COL = {L:'#3aa0ff', R:'#c060ff'};      // L blue, R purple/pink
-const HAND_REST_RAD = R_OUTER + RING*0.02;        // just outside the outer ring
+const HAND_REST_RAD = R_OUTER + HAND_R_REST + 4;  // inner edge 4px outside R_OUTER
 const handRest = {
-  L:{x:CX - HAND_REST_RAD, y:CY},                 // west, beside D7
-  R:{x:CX + HAND_REST_RAD, y:CY},                 // east, beside D3
+  L:{x:CX - HAND_REST_RAD, y:CY},                 // west edge
+  R:{x:CX + HAND_REST_RAD, y:CY},                 // east edge
 };
 const hands = {
   L:{x:handRest.L.x, y:handRest.L.y},
   R:{x:handRest.R.x, y:handRest.R.y},
 };
 function drawHands(){
-  if(autoMode)return;                             // hands play only in manual mode
-  const one=(h,col)=>{
+  // Always draw — shows at rest in auto/idle, moves to notes in manual (future).
+  const one=(h,col,r)=>{
     ctx.save();
-    ctx.beginPath();ctx.arc(h.x,h.y,HAND_R,0,7);
-    ctx.fillStyle=col+'33';ctx.fill();            // translucent body
-    ctx.lineWidth=Math.max(3,HAND_R*0.2);ctx.strokeStyle=col;ctx.stroke();
-    ctx.beginPath();ctx.arc(h.x,h.y,HAND_R*0.26,0,7);ctx.fillStyle=col;ctx.fill();  // core dot
+    ctx.beginPath();ctx.arc(h.x,h.y,r,0,7);
+    ctx.fillStyle=col+'33';ctx.fill();
+    ctx.lineWidth=Math.max(2,r*0.2);ctx.strokeStyle=col;ctx.stroke();
+    ctx.beginPath();ctx.arc(h.x,h.y,r*0.28,0,7);ctx.fillStyle=col;ctx.fill();
     ctx.restore();
   };
-  one(hands.L,HAND_COL.L);
-  one(hands.R,HAND_COL.R);
+  one(hands.L,HAND_COL.L,HAND_R_REST);
+  one(hands.R,HAND_COL.R,HAND_R_REST);
 }
 
 /* ============================ frame composition ============================ */
@@ -1104,7 +1107,7 @@ function noteTarget(nt){
   if(nt.type==='slide')return 'A'+nt.from;           // slide head
   return 'A'+nt.pos;                                 // tap, hold
 }
-const isJudgeNote=nt=>!nt.slideHead&&(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide');
+const isJudgeNote=nt=>(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide')&&!nt.bad;
 // Per the RemyWiki, a hold/touch-hold keeps its Perfect as long as it is held
 // for at least 80% of its duration; once that's reached, releasing early no
 // longer downgrades (or greys) it.
@@ -1114,8 +1117,16 @@ function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._miss
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
-    if(!isJudgeNote(nt)||nt._j)continue;
-    if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
+    if(!isJudgeNote(nt)||nt._j||nt.slideHead)continue;
+    if(t>nt.time+winFor(nt).good){
+      nt._j={tier:'miss',t:nt.time+winFor(nt).good};
+      // Co-miss the slide head tap when its slide is missed
+      if(nt.type==='slide'){
+        for(const sh of chart.notes){
+          if(sh.slideHead&&!sh._j&&sh.time===nt.time&&sh.pos===nt.from){sh._j={tier:'miss',t:nt._j.t};break;}
+        }
+      }
+    }
   }
 }
 // Track held time vs un-held time during a hold, and drive its sustained tone.
@@ -1194,12 +1205,19 @@ function judgeInput(sensorSet){
   for(const sid of sensorSet){
     let best=null,bd=1e9;
     for(const nt of chart.notes){
-      if(!isJudgeNote(nt)||nt._j||noteTarget(nt)!==sid)continue;
+      // slideHeads are co-judged with their slide note, never judged directly
+      if(!isJudgeNote(nt)||nt._j||nt.slideHead||noteTarget(nt)!==sid)continue;
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
     if(best){const isBreakNote=best.type==='tap'&&best.break;
       best._j={tier:best.ex?'cp':isBreakNote?breakTierFor(curT-best.time):tierFor(curT-best.time,winFor(best)),t:curT};
+      // Co-judge the slide head tap with the same tier as the slide
+      if(best.type==='slide'){
+        for(const nt of chart.notes){
+          if(nt.slideHead&&!nt._j&&nt.time===best.time&&nt.pos===best.from){nt._j={tier:best._j.tier,t:best._j.t};break;}
+        }
+      }
       if(best._j.tier!=='miss'){
         const hs=best.type==='tap'?(best.break?'brk':'tap'):best.type==='hold'?'hold':best.type==='slide'?'slide':best.type==='touch'?'touch':'th';
         playHitSound(hs);
@@ -1274,7 +1292,7 @@ function updateCounts(){
   }
   // Manual mode: per-type × per-tier accuracy grid
   const ROWS=[
-    {key:'tap', label:'Tap',   filter:nt=>nt.type==='tap'&&!nt.break&&!nt.slideHead},
+    {key:'tap', label:'Tap',   filter:nt=>nt.type==='tap'&&!nt.break},
     {key:'brk', label:'Break', filter:nt=>nt.type==='tap'&&nt.break},
     {key:'hld', label:'Hold',  filter:nt=>nt.type==='hold'},
     {key:'sld', label:'Slide', filter:nt=>nt.type==='slide'},
