@@ -1049,6 +1049,7 @@ function render(chart,t){
     }
   }
   drawParticles();
+  drawScore();
 }
 
 /* ============================ mini timeline ============================ */
@@ -1124,6 +1125,75 @@ function holdGrey(nt,t){
   if((nt._heldTime||0)>=HOLD_SECURE*(nt.dur||1e-9))return false;   // banked enough -> never grey
   return !activeSensors.has(noteTarget(nt));                        // grey only while not holding
 }
+/* ========================= achievement scoring ========================= */
+// Weights per note type (Tap=1, Hold=2, Slide=3, Touch=1, TouchHold=2, Break=5)
+function computeAchievement(){
+  if(!chart)return null;
+  let maxBase=0,actualBase=0,breakCount=0,breakScore=0;
+  for(const nt of chart.notes){
+    if(!isJudgeNote(nt))continue;
+    const isBreak=nt.type==='tap'&&nt.break;
+    const w=isBreak?5:nt.type==='tap'?1:nt.type==='hold'?2:nt.type==='slide'?3:nt.type==='touch'?1:nt.type==='touchHold'?2:0;
+    if(!w)continue;
+    maxBase+=w;
+    if(isBreak)breakCount++;
+    if(!nt._j)continue;
+    const tier=nt._j.tier;
+    if(isBreak){
+      actualBase+=w*({cp:1,p:1,great:0.8,good:0.4,miss:0}[tier]??0);
+      breakScore+=({cp:1,p:0.75,great:0.4,good:0.3,miss:0}[tier]??0);
+    }else{
+      actualBase+=w*({cp:1,p:1,great:0.8,good:0.5,miss:0}[tier]??0);
+    }
+  }
+  if(!maxBase)return null;
+  const base=(actualBase/maxBase)*100;
+  const bonus=breakCount?(breakScore/breakCount):0;  // fraction of 1%
+  return{total:base+bonus,base,bonus,maxBase,breakCount};
+}
+
+// Draw achievement rate at canvas center, on top of all note layers.
+function drawScore(){
+  if(autoMode||!chart)return;
+  const a=computeAchievement();
+  if(!a)return;
+  // Count judged notes for judgment summary
+  const jc={cp:0,p:0,great:0,good:0,miss:0};
+  let judged=0;
+  for(const nt of chart.notes){
+    if(!isJudgeNote(nt)||!nt._j)continue;
+    jc[nt._j.tier]=(jc[nt._j.tier]||0)+1;judged++;
+  }
+  if(!judged)return;  // nothing judged yet — stay silent
+  ctx.save();
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  // Achievement percentage — colour shifts gold at 100%+
+  const total=a.total;
+  const pctCol=total>=100?'#ffd23b':total>=99?'#e8ecf6':'#b0b8d0';
+  const pct=total.toFixed(4)+'%';
+  const fs=Math.round(W*0.052);
+  ctx.font=`bold ${fs}px ui-sans-serif,system-ui,sans-serif`;
+  ctx.lineWidth=6;ctx.strokeStyle='rgba(0,0,0,0.82)';ctx.lineJoin='round';
+  ctx.strokeText(pct,CX,CY-fs*0.08);
+  ctx.fillStyle=pctCol;ctx.fillText(pct,CX,CY-fs*0.08);
+  // Judgment count row below the number
+  const sfs=Math.round(W*0.024);
+  ctx.font=`${sfs}px ui-sans-serif,system-ui,sans-serif`;
+  const rows=[
+    {lbl:'CP',n:jc.cp,c:'#ffd23b'},{lbl:'P',n:jc.p,c:'#e8ecf6'},
+    {lbl:'Gr',n:jc.great,c:'#5ec06a'},{lbl:'Gd',n:jc.good,c:'#5b8bff'},
+    {lbl:'Mi',n:jc.miss,c:'#ff5c5c'},
+  ];
+  const gap=W*0.058,startX=CX-(rows.length-1)*gap/2,y=CY+fs*0.82;
+  for(let i=0;i<rows.length;i++){
+    const {lbl,n,c}=rows[i],txt=`${n}${lbl}`;
+    ctx.lineWidth=3;ctx.strokeStyle='rgba(0,0,0,0.82)';
+    ctx.strokeText(txt,startX+i*gap,y);
+    ctx.fillStyle=c;ctx.fillText(txt,startX+i*gap,y);
+  }
+  ctx.restore();
+}
+
 // Judge the closest unjudged note on each pressed sensor that is within window.
 function judgeInput(sensorSet){
   if(autoMode||!chart)return;
