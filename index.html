@@ -936,7 +936,15 @@ function drawBoard(){
 }
 function render(chart,t){
   drawBoard();
-  if(!chart)return;
+  if(!chart){
+    // No chart: still draw finger feedback and bail.
+    if(pointerInput){
+      ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();
+      ctx.restore();
+    }
+    return;
+  }
   // Pass 1: slides, drawn first so non-slide notes sit on top. The slide that
   // APPEARS first (smaller spawn time T-lead, i.e. smaller T) must be on top.
   // Iterate latest -> earliest so the earliest is painted LAST and ends up on
@@ -1162,7 +1170,7 @@ function computeAchievement(){
 
 // Draw achievement rate at canvas center, on top of all note layers.
 function drawScore(){
-  if(autoMode||!chart)return;
+  if(autoMode||!chart||curT<=0)return;
   const a=computeAchievement();
   if(!a)return;
   // Count judged notes — fold break sub-tiers into display buckets
@@ -1175,7 +1183,6 @@ function drawScore(){
     const b=tierBucket[nt._j.tier]??'miss';
     jc[b]++;judged++;
   }
-  if(!judged)return;  // nothing judged yet — stay silent
   ctx.save();
   ctx.textAlign='center';ctx.textBaseline='middle';
   // Achievement percentage — colour shifts gold at 100%+
