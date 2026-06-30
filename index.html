@@ -14,37 +14,20 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  .wrap{display:flex;gap:16px;padding:16px;height:100%;min-height:100vh}
-  @media(max-width:920px){.wrap{flex-direction:column;height:auto}}
-  .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px}
-  .side{flex:1 1 auto;min-width:280px;display:flex;flex-direction:column;gap:14px}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:16px;padding:16px;min-height:100vh}
+  .stage{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:720px}
+  .side{width:100%;max-width:900px;display:flex;flex-direction:column;gap:14px}
   .ringwrap{position:relative;display:inline-block;line-height:0;max-width:100%;
     transform:scale(var(--zoom));transform-origin:center center}
   canvas#ring{background:radial-gradient(circle at 50% 50%,#10131f,#080a11);
     border-radius:50%;box-shadow:0 0 0 1px var(--line),0 20px 60px rgba(0,0,0,.5);
-    width:min(72vh,520px);height:min(72vh,520px);max-width:100%;display:block;
+    width:min(calc(100vw - 32px),720px);height:min(calc(100vw - 32px),720px);max-width:100%;display:block;
     touch-action:none;user-select:none;-webkit-user-select:none}
   #songVideo{display:none}
   #songAudio{display:none}
-  /* Play mode: body.fs centers the canvas; body.playing tracks playback state */
-  body.fs{overflow:hidden}
-  body.fs .wrap{padding:0;gap:0;justify-content:center;align-items:center;
-    height:100vh;min-height:0;flex-direction:column}
-  body.fs .stage{gap:6px}
-  body.fs canvas#ring{width:min(90vh,90vw);height:min(90vh,90vw);max-width:none}
-  body.fs .transport{width:min(90vh,90vw)}
-  body.fs .panel,body.fs .legend{display:none}
-  body.fs .fs-ctrl{display:flex!important}
-  body.fs #fullscreen,body.fs #openSettings{display:none}
-  /* Hide play/stop transport buttons in play mode (use fs-ctrl overlay instead) */
-  body.fs #play,body.fs #stop{display:none}
   /* Seek slider: thin decorative line while playing; interactive when paused */
   body.playing #seek{height:3px;pointer-events:none;opacity:0.45;cursor:default}
-  /* Side panel inside modal Menus tab */
-  #tabMenusPane>.side{flex:none;min-width:0;gap:10px}
-  /* Wider modal when Menus tab is open */
-  .modal.wide{width:560px}
-  .transport{display:flex;flex-direction:column;gap:10px;width:calc(min(72vh,520px)*var(--zoom));max-width:100%;transition:width 0.1s}
+  .transport{display:flex;flex-direction:column;gap:10px;width:100%;max-width:100%;transition:width 0.1s}
   .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
     border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
@@ -79,20 +62,9 @@
   .tabs{display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--line);padding-bottom:6px}
   .tab-btn{background:none;border:1px solid transparent;border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;color:var(--dim)}
   .tab-btn.active{background:var(--panel2);border-color:var(--line);color:var(--txt)}
-  /* Fullscreen overlay controls */
-  .fs-ctrl{display:none;position:fixed;top:10px;left:10px;z-index:200;flex-direction:column;gap:5px}
-  .fs-ctrl button{padding:8px 10px;font-size:18px;line-height:1;border-radius:10px;
-    background:rgba(13,16,26,0.88);border:1px solid var(--line);min-width:36px;text-align:center}
 </style>
 </head>
 <body>
-<!-- Fullscreen overlay controls (top-left, visible only in fullscreen mode) -->
-<div class="fs-ctrl" id="fsCtrl">
-  <button id="fs-play" title="Play/Pause">▶</button>
-  <button id="fs-stop" title="Stop">⏹</button>
-  <button id="fs-settings" title="Settings">⚙</button>
-  <button id="fs-exit" title="Exit Fullscreen">✕</button>
-</div>
 <div class="wrap">
   <div class="stage" id="stage">
     <div class="ringwrap" id="ringwrap">
@@ -119,8 +91,7 @@
           </select>
         </div>
         <label class="chk" style="margin:0 0 0 12px"><input id="autoMode" type="checkbox" checked> Auto</label>
-        <button id="fullscreen" title="Fullscreen" style="margin-left:auto;padding:6px 10px;font-size:13px">⛶ <span class="lbl">Full</span></button>
-        <button id="openSettings" title="Settings" style="padding:6px 10px;font-size:13px">⚙</button>
+        <button id="openSettings" title="Settings" style="margin-left:auto;padding:6px 10px;font-size:13px">⚙ Settings</button>
       </div>
       <div class="legend">
         <span><i class="dot" style="background:var(--accent)"></i>Tap</span>
@@ -131,7 +102,7 @@
         <span><i class="dot" style="background:var(--brk)"></i>Break</span>
       </div>
     </div>
-    <div class="panel" style="width:min(72vh,520px);max-width:100%">
+    <div class="panel" style="width:100%">
       <h2>Chart info</h2>
       <div class="meta" id="info"><span class="dim">Load a chart to begin.</span></div>
       <div id="counts" style="margin-top:10px;display:flex;flex-direction:column;gap:3px;font-size:13px;font-variant-numeric:tabular-nums"></div>
@@ -178,7 +149,6 @@
     <div class="tabs">
       <button class="tab-btn active" id="tabGameplay">Gameplay</button>
       <button class="tab-btn" id="tabAudio">Audio</button>
-      <button class="tab-btn" id="tabMenus">Menus</button>
     </div>
     <!-- Gameplay tab -->
     <div id="tabGameplayPane">
@@ -245,8 +215,6 @@
       </label>
       <label class="chk"><input id="soundOn" type="checkbox" checked> Guide sounds on</label>
     </div>
-    <!-- Menus tab: sidebar panels are moved here in play mode -->
-    <div id="tabMenusPane" style="display:none"></div>
   </div>
 </div>
 
@@ -1498,32 +1466,20 @@ $('folder').onchange=e=>{if(e.target.files&&e.target.files.length)loadFolder(e.t
 $('showPv').onchange=e=>{pvEnabled=e.target.checked;frame(true);};
 // Settings tabs
 function showSettingsTab(id){
-  const tabs=['tabGameplay','tabAudio','tabMenus'];
-  const panes=['tabGameplayPane','tabAudioPane','tabMenusPane'];
+  const tabs=['tabGameplay','tabAudio'];
+  const panes=['tabGameplayPane','tabAudioPane'];
   tabs.forEach(t=>{$(t).classList.toggle('active',t===id);});
   panes.forEach((p,i)=>{$(p).style.display=(tabs[i]===id?'':'none');});
-  const modal=$('settingsModal').querySelector('.modal');
-  modal.classList.toggle('wide',id==='tabMenus');
 }
 $('tabGameplay').onclick=()=>showSettingsTab('tabGameplay');
 $('tabAudio').onclick=()=>showSettingsTab('tabAudio');
-$('tabMenus').onclick=()=>{
-  // If not in play mode, sidebar is still in .wrap — move it temporarily
-  if(!isFull){const s=sideEl();if(s)$('tabMenusPane').appendChild(s);}
-  showSettingsTab('tabMenus');
-};
-// Restore sidebar to wrap when closing modal (if not in play mode)
 $('closeSettings').onclick=()=>{
   $('settingsModal').classList.remove('open');
-  if(!isFull){const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);}
-  $('settingsModal').querySelector('.modal').classList.remove('wide');
   showSettingsTab('tabGameplay');
 };
 $('settingsModal').onclick=e=>{
   if(e.target===$('settingsModal')){
     $('settingsModal').classList.remove('open');
-    if(!isFull){const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);}
-    $('settingsModal').querySelector('.modal').classList.remove('wide');
     showSettingsTab('tabGameplay');
   }
 };
@@ -1538,34 +1494,10 @@ for(const [id,key] of Object.entries(volIds)){
   const valEl=$(id+'Val');
   el.oninput=e=>{const v=parseFloat(e.target.value);if(valEl)valEl.textContent=Math.round(v*100)+'%';ensureAudio();setVol(key,v);};
 }
-// Play mode: body.fs centres the canvas; no browser fullscreen API used.
-let isFull=false;
-const sideEl=()=>document.querySelector('.side');
-function enterFs(){
-  isFull=true;document.body.classList.add('fs');
-  // Move sidebar into the Menus tab pane
-  const s=sideEl();if(s)$('tabMenusPane').appendChild(s);
-  syncPlayState();
-}
-function exitFs(){
-  isFull=false;document.body.classList.remove('fs');
-  // Return sidebar to main layout
-  const s=sideEl();if(s)document.querySelector('.wrap').appendChild(s);
-  // Reset modal to normal width and close Menus view
-  $('settingsModal').querySelector('.modal').classList.remove('wide');
-  showSettingsTab('tabGameplay');
-  syncPlayState();
-}
 function syncPlayState(){
   document.body.classList.toggle('playing',playing);
   $('play').textContent=playing?'⏸ Pause':'▶ Play';
-  $('fs-play').textContent=playing?'⏸':'▶';
 }
-$('fullscreen').onclick=()=>{isFull?exitFs():enterFs();};
-$('fs-exit').onclick=exitFs;
-$('fs-play').onclick=()=>{$('play').click();};
-$('fs-stop').onclick=()=>{$('stop').click();};
-$('fs-settings').onclick=()=>$('settingsModal').classList.add('open');
 mini.onclick=e=>{if(!chart)return;const r=mini.getBoundingClientRect();
   curT=((e.clientX-r.left)/r.width)*chart.duration;frame(true);updateLabel();};
 
