@@ -933,12 +933,6 @@ function drawBoard(){
   ctx.save();ctx.globalAlpha=boardImgMode?bb:0.3*bb;ctx.drawImage(boardCanvas,0,0);ctx.restore();
   ctx.save();ctx.globalAlpha=0.3*bb;drawLitSensors();ctx.restore();   // dynamic light-ups
   drawTargets(ctx);
-  drawHands();
-  if(pointerInput){
-    ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
-    ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();
-    ctx.restore();
-  }
 }
 function render(chart,t){
   drawBoard();
@@ -1049,6 +1043,13 @@ function render(chart,t){
     }
   }
   drawParticles();
+  // Hands and pointer drawn after notes/particles so they're always on top.
+  drawHands();
+  if(pointerInput){
+    ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();
+    ctx.restore();
+  }
   drawScore();
 }
 
