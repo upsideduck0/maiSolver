@@ -993,12 +993,14 @@ function render(chart,t){
     // the input is released); remaining chevrons are cut instantly at endVis ---
     const autoIdx=autoMode?((t>=moveStart)?seqIndexAtU(nt._sens.startU,prog):-1):-1;
     nt._clearMax=clearedIndex(nt._sens,autoIdx,nt._clearMax);
+    // In manual mode: hide the traveling star as soon as all track sensors are cleared.
+    const allCleared=!autoMode&&nt._sens.seq.length>0&&nt._clearMax>=nt._sens.seq.length-1;
     if(isFan){
       drawFanTrack(nt._paths,col,autoMode?prog:-1,P);
-      if(moving)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1,nt.ex);}
+      if(moving&&!allCleared)for(const pth of nt._paths){const tan=tangentAt(pth,prog);drawStar(alongPoly(pth,prog),col,tan+Math.PI/2,1,1,nt.ex);}
     }else{
       drawChevronTrack(nt._pts,col,nt._sens,nt._clearMax,P);
-      if(moving){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1,nt.ex);}
+      if(moving&&!allCleared){const tan=tangentAt(nt._pts,prog);drawStar(alongPoly(nt._pts,prog),col,tan+Math.PI/2,1,1,nt.ex);}
     }
   }
   // Pass 2: non-slide notes on top. In Auto each vanishes at its beat; with Auto
@@ -1173,42 +1175,16 @@ function drawScore(){
   if(autoMode||!chart||curT<=0)return;
   const a=computeAchievement();
   if(!a)return;
-  // Count judged notes — fold break sub-tiers into display buckets
-  const jc={cp:0,p:0,great:0,good:0,miss:0};
-  // Map every possible tier string to a display bucket
-  const tierBucket={cp:'cp',p:'p',hp:'p',lp:'p',great:'great',hg:'great',mg:'great',lg:'great',good:'good',miss:'miss'};
-  let judged=0;
-  for(const nt of chart.notes){
-    if(!isJudgeNote(nt)||!nt._j)continue;
-    const b=tierBucket[nt._j.tier]??'miss';
-    jc[b]++;judged++;
-  }
   ctx.save();
   ctx.textAlign='center';ctx.textBaseline='middle';
-  // Achievement percentage — colour shifts gold at 100%+
   const total=a.total;
   const pctCol=total>=100?'#ffd23b':total>=99?'#e8ecf6':'#b0b8d0';
   const pct=total.toFixed(4)+'%';
   const fs=Math.round(W*0.052);
   ctx.font=`bold ${fs}px ui-sans-serif,system-ui,sans-serif`;
   ctx.lineWidth=6;ctx.strokeStyle='rgba(0,0,0,0.82)';ctx.lineJoin='round';
-  ctx.strokeText(pct,CX,CY-fs*0.08);
-  ctx.fillStyle=pctCol;ctx.fillText(pct,CX,CY-fs*0.08);
-  // Judgment count row below the number
-  const sfs=Math.round(W*0.024);
-  ctx.font=`${sfs}px ui-sans-serif,system-ui,sans-serif`;
-  const rows=[
-    {lbl:'CP',n:jc.cp,c:'#ffd23b'},{lbl:'P',n:jc.p,c:'#e8ecf6'},
-    {lbl:'Gr',n:jc.great,c:'#5ec06a'},{lbl:'Gd',n:jc.good,c:'#5b8bff'},
-    {lbl:'Mi',n:jc.miss,c:'#ff5c5c'},
-  ];
-  const gap=W*0.058,startX=CX-(rows.length-1)*gap/2,y=CY+fs*0.82;
-  for(let i=0;i<rows.length;i++){
-    const {lbl,n,c}=rows[i],txt=`${n}${lbl}`;
-    ctx.lineWidth=3;ctx.strokeStyle='rgba(0,0,0,0.82)';
-    ctx.strokeText(txt,startX+i*gap,y);
-    ctx.fillStyle=c;ctx.fillText(txt,startX+i*gap,y);
-  }
+  ctx.strokeText(pct,CX,CY);
+  ctx.fillStyle=pctCol;ctx.fillText(pct,CX,CY);
   ctx.restore();
 }
 
@@ -1284,13 +1260,54 @@ function showInfo(meta,k){
     `<span>Length <b>${fmtTime(chart.duration)}</b></span>`;
   showReports();updateCounts();
 }
-// Per-type counts as played/total, each on its own line; updates live with playback.
+// Per-type note counts (auto mode) or judgment accuracy grid (manual mode).
+const TIER_BUCKET={cp:'cp',p:'p',hp:'p',lp:'p',great:'great',hg:'great',mg:'great',lg:'great',good:'good',miss:'miss'};
 function updateCounts(){
   if(!chart){$('counts').innerHTML='';return;}
-  const cats=['Tap','Hold','Slide','Touch'];
-  const tot={Tap:0,Hold:0,Slide:0,Touch:0}, play={Tap:0,Hold:0,Slide:0,Touch:0};
-  for(const nt of chart.notes){if(nt.slideHead||nt.bad)continue;const c=noteCat(nt);tot[c]++;if(nt.time<=curT)play[c]++;}
-  $('counts').innerHTML=cats.map(c=>`<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">${c}</span><span>${play[c]}/${tot[c]}</span></div>`).join('');
+  if(autoMode){
+    // Simple played/total per type
+    const cats=['Tap','Hold','Slide','Touch'];
+    const tot={Tap:0,Hold:0,Slide:0,Touch:0},play={Tap:0,Hold:0,Slide:0,Touch:0};
+    for(const nt of chart.notes){if(nt.slideHead||nt.bad)continue;const c=noteCat(nt);tot[c]++;if(nt.time<=curT)play[c]++;}
+    $('counts').innerHTML=cats.map(c=>`<div style="display:flex;justify-content:space-between"><span style="color:var(--dim)">${c}</span><span>${play[c]}/${tot[c]}</span></div>`).join('');
+    return;
+  }
+  // Manual mode: per-type × per-tier accuracy grid
+  const ROWS=[
+    {key:'tap', label:'Tap',   filter:nt=>nt.type==='tap'&&!nt.break&&!nt.slideHead},
+    {key:'brk', label:'Break', filter:nt=>nt.type==='tap'&&nt.break},
+    {key:'hld', label:'Hold',  filter:nt=>nt.type==='hold'},
+    {key:'sld', label:'Slide', filter:nt=>nt.type==='slide'},
+    {key:'tch', label:'Touch', filter:nt=>nt.type==='touch'},
+    {key:'th',  label:'T.Hold',filter:nt=>nt.type==='touchHold'},
+  ];
+  const TIERS=['cp','p','great','good','miss'];
+  const TIER_HDR=['CP','P','Gr','Gd','Mi'];
+  const TIER_C=['var(--each)','#e8ecf6','#5ec06a','#5b8bff','#ff5c5c'];
+  const g={};for(const {key} of ROWS)g[key]={cp:0,p:0,great:0,good:0,miss:0,tot:0};
+  for(const nt of chart.notes){
+    if(!isJudgeNote(nt)||nt.bad)continue;
+    const row=ROWS.find(r=>r.filter(nt));if(!row)continue;
+    g[row.key].tot++;
+    if(nt._j){const b=TIER_BUCKET[nt._j.tier]??'miss';g[row.key][b]++;}
+  }
+  const visible=ROWS.filter(r=>g[r.key].tot>0);
+  if(!visible.length){$('counts').innerHTML='';return;}
+  let html=`<table style="width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums">`;
+  html+=`<tr><td></td>`;
+  for(let i=0;i<TIERS.length;i++)html+=`<th style="text-align:center;padding:1px 5px;color:${TIER_C[i]};font-weight:600">${TIER_HDR[i]}</th>`;
+  html+=`<th style="text-align:center;padding:1px 5px;color:var(--dim);font-weight:400">Tot</th></tr>`;
+  for(const {key,label} of visible){
+    const r=g[key];
+    html+=`<tr><td style="padding:2px 0;color:var(--dim);font-size:11px;padding-right:8px">${label}</td>`;
+    for(let i=0;i<TIERS.length;i++){
+      const n=r[TIERS[i]];
+      html+=`<td style="text-align:center;padding:1px 5px;color:${n?TIER_C[i]:'var(--line)'}">${n||'·'}</td>`;
+    }
+    html+=`<td style="text-align:center;padding:1px 5px;color:var(--dim)">${r.tot}</td></tr>`;
+  }
+  html+=`</table>`;
+  $('counts').innerHTML=html;
 }
 function showReports(){const r=(chart&&chart.reports)||[];$('console').textContent=r.length?r.join('\n'):'No reports.';}
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
