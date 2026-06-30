@@ -24,6 +24,8 @@
     width:min(calc(100vw - 32px),720px);height:min(calc(100vw - 32px),720px);max-width:100%;display:block;
     touch-action:none;user-select:none;-webkit-user-select:none}
   #songVideo{display:none}
+  /* Hand layer: same dimensions as ring but no border-radius so hands can appear in corners outside the circle */
+  #handLayer{position:absolute;top:0;left:0;width:min(calc(100vw - 32px),720px);height:min(calc(100vw - 32px),720px);max-width:100%;pointer-events:none;display:block}
   #songAudio{display:none}
   /* Seek slider: thin decorative line while playing; interactive when paused */
   body.playing #seek{height:3px;pointer-events:none;opacity:0.45;cursor:default}
@@ -69,6 +71,7 @@
   <div class="stage" id="stage">
     <div class="ringwrap" id="ringwrap">
       <canvas id="ring" width="720" height="720"></canvas>
+      <canvas id="handLayer" width="720" height="720"></canvas>
     </div>
     <video id="songVideo" playsinline muted preload="auto" style="display:none"></video>
     <audio id="songAudio" preload="auto"></audio>
@@ -867,36 +870,39 @@ function drawParticles(){
 
 /* ============================ hand solver ============================ */
 // Two hands play the chart in manual mode. Left is blue, right is purple/pink
-// (Arcaea "sky" palette). Their resting position sits just outside the play
-// area, level with the centre, next to the leftmost D sensor (D7, west) and the
-// rightmost D sensor (D3, east). Movement/assignment logic comes next; for now
-// the hands sit at rest so the placement can be verified.
-const HAND_R = RING*0.075;                       // hand radius when active/on a note
-// Rest radius is smaller so the hand fits entirely in the gap between R_OUTER (331)
-// and the canvas circle edge (360). RING*0.045≈13px; inner edge = R_OUTER+4, outer<360.
-const HAND_R_REST = RING*0.045;
-const HAND_COL = {L:'#3aa0ff', R:'#c060ff'};      // L blue, R purple/pink
-const HAND_REST_RAD = R_OUTER + HAND_R_REST + 4;  // inner edge 4px outside R_OUTER
+// Hand markers are drawn on a second canvas (#handLayer) that has no border-radius,
+// so they can appear in the corner areas of the 720×720 square that lie outside the
+// visible circular ring. Resting positions are at 7:30 (L) and 4:30 (R) o'clock —
+// the lower-left / lower-right corners — at a radius that clears R_OUTER.
+const handCv = document.getElementById('handLayer');
+const handCtx = handCv.getContext('2d');
+const HAND_R = RING*0.075;                        // active radius (future: on a note)
+const HAND_R_REST = SENSOR_C * 0.75;             // rest radius = 75% of C sensor
+const HAND_COL = {L:'#3aa0ff', R:'#c060ff'};
+// 7:30 o'clock = 135° east; 4:30 o'clock = 45° east (screen y-down coords)
+const HAND_REST_RAD = R_OUTER + HAND_R_REST + 8; // centre clears R_OUTER by 8px
 const handRest = {
-  L:{x:CX - HAND_REST_RAD, y:CY},                 // west edge
-  R:{x:CX + HAND_REST_RAD, y:CY},                 // east edge
+  L:{x: CX + Math.cos(Math.PI*3/4)*HAND_REST_RAD, y: CY + Math.sin(Math.PI*3/4)*HAND_REST_RAD},
+  R:{x: CX + Math.cos(Math.PI/4)*HAND_REST_RAD,   y: CY + Math.sin(Math.PI/4)*HAND_REST_RAD},
 };
 const hands = {
   L:{x:handRest.L.x, y:handRest.L.y},
   R:{x:handRest.R.x, y:handRest.R.y},
 };
 function drawHands(){
-  // Always draw — shows at rest in auto/idle, moves to notes in manual (future).
-  const one=(h,col,r)=>{
-    ctx.save();
-    ctx.beginPath();ctx.arc(h.x,h.y,r,0,7);
-    ctx.fillStyle=col+'33';ctx.fill();
-    ctx.lineWidth=Math.max(2,r*0.2);ctx.strokeStyle=col;ctx.stroke();
-    ctx.beginPath();ctx.arc(h.x,h.y,r*0.28,0,7);ctx.fillStyle=col;ctx.fill();
-    ctx.restore();
-  };
-  one(hands.L,HAND_COL.L,HAND_R_REST);
-  one(hands.R,HAND_COL.R,HAND_R_REST);
+  handCtx.clearRect(0,0,W,H);
+  withCtx(handCtx,()=>{
+    const one=(h,col,r)=>{
+      ctx.save();
+      ctx.beginPath();ctx.arc(h.x,h.y,r,0,7);
+      ctx.fillStyle=col+'33';ctx.fill();
+      ctx.lineWidth=Math.max(2,r*0.2);ctx.strokeStyle=col;ctx.stroke();
+      ctx.beginPath();ctx.arc(h.x,h.y,r*0.28,0,7);ctx.fillStyle=col;ctx.fill();
+      ctx.restore();
+    };
+    one(hands.L,HAND_COL.L,HAND_R_REST);
+    one(hands.R,HAND_COL.R,HAND_R_REST);
+  });
 }
 
 /* ============================ frame composition ============================ */
@@ -939,6 +945,7 @@ function drawBoard(){
 }
 function render(chart,t){
   drawBoard();
+  drawHands();  // always on the hand layer, visible even without a chart
   if(!chart){
     // No chart: still draw finger feedback and bail.
     if(pointerInput){
@@ -1056,8 +1063,6 @@ function render(chart,t){
     }
   }
   drawParticles();
-  // Hands and pointer drawn after notes/particles so they're always on top.
-  drawHands();
   if(pointerInput){
     ctx.save();ctx.fillStyle='rgba(255,255,255,0.16)';ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(pointerInput.x,pointerInput.y,pointerInput.r,0,7);ctx.fill();ctx.stroke();
