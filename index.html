@@ -1130,7 +1130,7 @@ function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
     // Slides are judged by sensor clearance at the end — not by timing window here.
-    if(!isJudgeNote(nt)||nt._j||nt.slideHead||nt.type==='slide')continue;
+    if(!isJudgeNote(nt)||nt._j||nt.type==='slide')continue;
     if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
   }
 }
@@ -1224,7 +1224,7 @@ function judgeInput(sensorSet){
   for(const sid of sensorSet){
     let best=null,bd=1e9;
     for(const nt of chart.notes){
-      if(!isJudgeNote(nt)||nt._j||nt.slideHead||nt.type==='slide'||noteTarget(nt)!==sid)continue;
+      if(!isJudgeNote(nt)||nt._j||nt.type==='slide'||noteTarget(nt)!==sid)continue;
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
