@@ -986,7 +986,7 @@ function render(chart,t){
     const P=appearDur<=0 ? (t>=appearStart?2:0) : (t-appearStart)/appearDur;
     // --- star head: approaches like a tap; if not hit (Auto off) it flies past
     // the button just like a missed tap. The travelling slide below still plays. ---
-    const headHit=nt._j&&nt._j.tier!=='miss';
+    const headHit=autoMode||(nt._headRef&&nt._headRef._j&&nt._headRef._j.tier!=='miss');
     if(t<T){
       drawStar(ptOnRing(nt.from,approachRadius(travelU(t,T,lead))),col,t*spinW,growU(t,T,lead),1,nt.ex);
     }else if(t<moveStart){
@@ -1119,19 +1119,31 @@ const isJudgeNote=nt=>(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.
 const HOLD_SECURE=0.8;
 function resetJudgments(){if(chart)for(const n of chart.notes){n._j=null;n._missHold=0;n._heldTime=0;n._clearMax=-1;n._fwSpawned=false;}
   particles=[];stopAllHoldTones();}
+// One-time setup after chart load: link each slide to its slideHead note so the
+// render can check head hit/miss without searching the full notes array each frame.
+function linkSlideHeads(chart){
+  const heads=new Map();
+  for(const nt of chart.notes)if(nt.slideHead)heads.set(nt.time+':'+nt.pos,nt);
+  for(const nt of chart.notes)if(nt.type==='slide'&&!nt.bad)nt._headRef=heads.get(nt.time+':'+nt.from)||null;
+}
 function updateMisses(t){
   if(autoMode||!chart)return;
   for(const nt of chart.notes){
-    if(!isJudgeNote(nt)||nt._j||nt.slideHead)continue;
-    if(t>nt.time+winFor(nt).good){
-      nt._j={tier:'miss',t:nt.time+winFor(nt).good};
-      // Co-miss the slide head tap when its slide is missed
-      if(nt.type==='slide'){
-        for(const sh of chart.notes){
-          if(sh.slideHead&&!sh._j&&sh.time===nt.time&&sh.pos===nt.from){sh._j={tier:'miss',t:nt._j.t};break;}
-        }
-      }
-    }
+    // Slides are judged by sensor clearance at the end — not by timing window here.
+    if(!isJudgeNote(nt)||nt._j||nt.slideHead||nt.type==='slide')continue;
+    if(t>nt.time+winFor(nt).good)nt._j={tier:'miss',t:nt.time+winFor(nt).good};
+  }
+}
+// Judge slide notes at the end of their travel based on how many sensors were cleared.
+// A slide is a miss only if 2 or more sensors remain uncleared.
+function updateSlideJudgments(t){
+  if(autoMode||!chart)return;
+  for(const nt of chart.notes){
+    if(nt.type!=='slide'||nt.bad||nt._j||!nt._sens)continue;
+    const moveEnd=nt.time+(nt.delaySec||0)+(nt.dur||0.3);
+    if(t<moveEnd+NWIN.good)continue;
+    const left=nt._sens.seq.length>0?nt._sens.seq.length-1-nt._clearMax:0;
+    nt._j={tier:left<=0?'cp':left===1?'great':'miss',t:moveEnd};
   }
 }
 // Track held time vs un-held time during a hold, and drive its sustained tone.
@@ -1205,26 +1217,21 @@ function drawScore(){
 }
 
 // Judge the closest unjudged note on each pressed sensor that is within window.
+// Slides are excluded — they are judged by sensor clearance at end, not by timing.
+// SlideHeads are excluded — they are judged independently as regular tap notes.
 function judgeInput(sensorSet){
   if(autoMode||!chart)return;
   for(const sid of sensorSet){
     let best=null,bd=1e9;
     for(const nt of chart.notes){
-      // slideHeads are co-judged with their slide note, never judged directly
-      if(!isJudgeNote(nt)||nt._j||nt.slideHead||noteTarget(nt)!==sid)continue;
+      if(!isJudgeNote(nt)||nt._j||nt.slideHead||nt.type==='slide'||noteTarget(nt)!==sid)continue;
       const a=Math.abs(curT-nt.time); if(a>winFor(nt).good)continue;
       if(a<bd){bd=a;best=nt;}
     }
     if(best){const isBreakNote=best.type==='tap'&&best.break;
       best._j={tier:best.ex?'cp':isBreakNote?breakTierFor(curT-best.time):tierFor(curT-best.time,winFor(best)),t:curT};
-      // Co-judge the slide head tap with the same tier as the slide
-      if(best.type==='slide'){
-        for(const nt of chart.notes){
-          if(nt.slideHead&&!nt._j&&nt.time===best.time&&nt.pos===best.from){nt._j={tier:best._j.tier,t:best._j.t};break;}
-        }
-      }
       if(best._j.tier!=='miss'){
-        const hs=best.type==='tap'?(best.break?'brk':'tap'):best.type==='hold'?'hold':best.type==='slide'?'slide':best.type==='touch'?'touch':'th';
+        const hs=best.type==='tap'?(best.break?'brk':'tap'):best.type==='hold'?'hold':best.type==='touch'?'touch':'th';
         playHitSound(hs);
       }
     }
@@ -1260,14 +1267,14 @@ function loadFromSource(){
       $('diffwrap').style.display='';
       const build=k=>{let b=ex.charts[k];chart=parseSimai(b,parseFloat(meta.bpm)||undefined);
         const f=parseFloat(meta.first)||0;
-        applyLeadIn(chart,f);};
+        applyLeadIn(chart,f);linkSlideHeads(chart);};
       build(parseInt(sel.value,10));
       sel.onchange=()=>{build(parseInt(sel.value,10));resetTransport();showInfo(meta,parseInt(sel.value,10));};
       showInfo(meta,parseInt(sel.value,10));
     }else{
       $('diffwrap').style.display='none';
       chart=parseSimai(body);
-      applyLeadIn(chart,0);
+      applyLeadIn(chart,0);linkSlideHeads(chart);
       showInfo({},null);
     }
     resetTransport();
@@ -1361,6 +1368,7 @@ function loop(ts){
     syncMedia();   // start / pause / coarse-seek the media toward curT as needed
     fireSounds(prevT,curT);
     updateMisses(curT);
+    updateSlideJudgments(curT);
     updateHolds(curT,raw);
     updateParticles(raw);
     frame(false);
