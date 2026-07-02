@@ -94,6 +94,8 @@
           </select>
         </div>
         <label class="chk" style="margin:0 0 0 12px"><input id="autoMode" type="checkbox" checked> Auto</label>
+        <label class="chk" style="margin:0 0 0 12px"><input id="solveMode" type="checkbox"> Solve</label>
+        <button id="tuneBtn" title="Auto-tune the solver's cost weights against achievement %" style="margin:0 0 0 8px;padding:6px 10px;font-size:13px">Tune</button>
         <button id="openSettings" title="Settings" style="margin-left:auto;padding:6px 10px;font-size:13px">⚙ Settings</button>
       </div>
       <div class="legend">
@@ -889,20 +891,230 @@ const hands = {
   L:{x:handRest.L.x, y:handRest.L.y},
   R:{x:handRest.R.x, y:handRest.R.y},
 };
+const handDown={L:false,R:false};   // set by the solver: is the hand pressing this frame?
 function drawHands(){
   handCtx.clearRect(0,0,W,H);
   withCtx(handCtx,()=>{
-    const one=(h,col,r)=>{
+    const one=(h,col,r,down)=>{
       ctx.save();
+      if(down){ctx.shadowColor=col;ctx.shadowBlur=r*0.7;}
       ctx.beginPath();ctx.arc(h.x,h.y,r,0,7);
-      ctx.fillStyle=col+'33';ctx.fill();
-      ctx.lineWidth=Math.max(2,r*0.2);ctx.strokeStyle=col;ctx.stroke();
-      ctx.beginPath();ctx.arc(h.x,h.y,r*0.28,0,7);ctx.fillStyle=col;ctx.fill();
+      ctx.fillStyle=col+(down?'88':'33');ctx.fill();
+      ctx.lineWidth=Math.max(2,r*(down?0.28:0.2));ctx.strokeStyle=col;ctx.stroke();
+      ctx.beginPath();ctx.arc(h.x,h.y,r*(down?0.4:0.28),0,7);ctx.fillStyle=col;ctx.fill();
       ctx.restore();
     };
-    one(hands.L,HAND_COL.L,HAND_R_REST);
-    one(hands.R,HAND_COL.R,HAND_R_REST);
+    one(hands.L,HAND_COL.L,HAND_R_REST,handDown.L);
+    one(hands.R,HAND_COL.R,HAND_R_REST,handDown.R);
   });
+}
+
+/* ===================== hand-solver: assignment + motion ===================== */
+// Ruleset + cost-based search (with offline weight auto-tuning). The two hands
+// are driven through the SAME sensor-input pipeline the mouse uses: each frame we
+// place the hands, feed the "pressing" ones into triggerInput(), then judgeInput()
+// grades them with the existing engine — so the solver is scored by real DX%.
+//
+// Pipeline:  buildActions -> assignHands (beam search over L/R states) ->
+//            planHand (kinematics with a hard speed cap) -> applySolverAt (per frame).
+// Because a hand can only move at MAX_V px/s, an over-ambitious assignment makes a
+// hand physically late and its note MISSES — that feasibility is what the tuner
+// optimises against (fitness = achievement %).
+const MAX_V = RING*9;                 // hand speed cap (px/s); ~2600 at 720px canvas
+let SOLVER_W = {dist:0.003, over:1.2, cross:45, busy:250};  // tunable cost weights
+let solverMode = false;               // when on, the two hands play the chart
+let solverPlan = null;                // {L:{steps,restPt}, R:{...}}
+const easeIO = u => u<0.5 ? 2*u*u : 1-((-2*u+2)**2)/2;
+
+// Cache a slide's polyline + ordered sensor sequence EXACTLY as the renderer does
+// (index.html render pass 1), so live drawing and headless simulation agree.
+function ensureSlideCache(nt){
+  if(nt._pts)return;
+  const isFan=nt.segs.some(s=>s.shape==='w');
+  if(isFan){const e=nt.segs[nt.segs.length-1].end;
+    nt._paths=[wrap8(e-1),e,wrap8(e+1)].map(tg=>[ptOnRing(nt.from,R_OUTER),ptOnRing(tg,R_OUTER)]);
+    nt._pts=nt._paths[1];
+  } else nt._pts=slidePolylines(nt).main;
+  nt._sens=slideSensors(nt._pts);
+}
+// Screen point a hand must reach to hit a note (centre of its target sensor).
+function noteStartPoint(nt){
+  if(nt.type==='touch'||nt.type==='touchHold')return touchPoint(nt);
+  if(nt.type==='slide')return ptOnRing(nt.from,(R_A_IN+R_OUTER)/2);
+  return ptOnRing(nt.pos,(R_A_IN+R_OUTER)/2);
+}
+// One "action" per judged note. A slide is one action (head tap + trace); its
+// auto-generated head-tap note is skipped and pressed by the slide's own hand.
+function buildActions(chart){
+  const acts=[];
+  for(const nt of chart.notes){
+    if(nt.bad)continue;
+    if(nt.type==='tap'&&nt.slideHead)continue;
+    if(!(nt.type==='tap'||nt.type==='hold'||nt.type==='touch'||nt.type==='touchHold'||nt.type==='slide'))continue;
+    const start=noteStartPoint(nt);
+    if(nt.type==='slide'){
+      ensureSlideCache(nt);
+      const delay=nt.delaySec||0, dur=nt.dur||0.3, moveStart=nt.time+delay, moveEnd=moveStart+dur;
+      acts.push({note:nt,kind:'slide',t0:nt.time,start,path:nt._pts,moveStart,moveEnd,
+                 freeEnd:moveEnd,endPt:nt._pts[nt._pts.length-1],trace:true});
+    }else if(nt.type==='hold'||nt.type==='touchHold'){
+      const end=nt.time+(nt.dur||0);
+      acts.push({note:nt,kind:nt.type,t0:nt.time,start,endPt:start,freeEnd:end,trace:false});
+    }else{
+      acts.push({note:nt,kind:nt.type,t0:nt.time,start,endPt:start,freeEnd:nt.time,trace:false});
+    }
+  }
+  acts.sort((a,b)=>a.t0-b.t0);
+  return acts;
+}
+// Cost of sending hand h (state {pt,free}) to action a. A busy or too-fast hand
+// is penalised rather than forbidden, so the search always returns a full plan.
+function stepCost(h,a,W){
+  const d=Math.hypot(h.pt.x-a.start.x,h.pt.y-a.start.y);
+  let c=d*W.dist;
+  if(h.free>-1e8){
+    const avail=a.t0-h.free;
+    if(avail<=1e-4)c+=W.busy*(1-Math.min(avail,0));           // hand still busy
+    else{const speed=d/avail; if(speed>MAX_V)c+=W.over*((speed-MAX_V)/1000);}  // too far, too fast
+  }
+  return c;
+}
+// Ways to hand out a simultaneous chord to the two hands.
+function handPerms(chord){
+  if(chord.length===1){const a=chord[0];return [new Map([[a,'L']]),new Map([[a,'R']])];}
+  if(chord.length===2){const [a,b]=chord;return [new Map([[a,'L'],[b,'R']]),new Map([[a,'R'],[b,'L']])];}
+  const mk=sw=>{const m=new Map();chord.forEach((a,i)=>m.set(a,((i%2===0)!==sw)?'L':'R'));return m;}; // >2: only 2 hands, extras will miss
+  return [mk(false),mk(true)];
+}
+// Beam search over (leftState,rightState) across the chord sequence.
+function assignHands(actions,W){
+  const chords=[]; let key=null,cur=null;
+  for(const a of actions){const k=Math.round(a.t0*1000);if(k!==key){cur=[];chords.push(cur);key=k;}cur.push(a);}
+  const BEAM=24;
+  let states=[{L:{pt:handRest.L,free:-1e9},R:{pt:handRest.R,free:-1e9},cost:0,choices:[]}];
+  for(const chord of chords){
+    const next=[];
+    for(const st of states) for(const perm of handPerms(chord)){
+      let cost=st.cost,L={...st.L},R={...st.R};
+      for(const a of chord){const h=perm.get(a);
+        if(h==='L'){cost+=stepCost(L,a,W);L={pt:a.endPt,free:a.freeEnd};}
+        else{cost+=stepCost(R,a,W);R={pt:a.endPt,free:a.freeEnd};}}
+      if(L.pt.x>R.pt.x)cost+=W.cross;                          // arms crossed
+      next.push({L,R,cost,choices:st.choices.concat([[perm,chord]])});
+    }
+    next.sort((a,b)=>a.cost-b.cost);
+    states=next.slice(0,BEAM);
+  }
+  const Lacts=[],Racts=[];
+  for(const [perm,chord] of (states[0]?states[0].choices:[]))
+    for(const a of chord){const h=perm.get(a);a.note._h=h;(h==='L'?Lacts:Racts).push(a);}
+  Lacts.sort((a,b)=>a.t0-b.t0);Racts.sort((a,b)=>a.t0-b.t0);
+  return {L:Lacts,R:Racts};
+}
+// Turn a hand's action list into timed motion steps (depart/arrive under MAX_V).
+function planHand(acts,restPt){
+  const steps=[]; let prevPt=restPt, prevFree=-1e9;
+  for(const a of acts){
+    const d=Math.hypot(prevPt.x-a.start.x,prevPt.y-a.start.y), travel=d/MAX_V;
+    let departT,arriveT;
+    if(prevFree<=-1e8){departT=a.t0-travel;arriveT=a.t0;}     // pre-position from rest
+    else{departT=prevFree;arriveT=prevFree+travel;}           // leave as soon as free (may be late)
+    steps.push({a,fromPt:prevPt,departT,arriveT});
+    prevPt=a.endPt;prevFree=a.freeEnd;
+  }
+  return {steps,restPt};
+}
+// Hand position + the action it is currently servicing, at time t.
+function solveHandState(plan,t){
+  const S=plan.steps;
+  if(!S.length||t<S[0].departT)return {pt:plan.restPt,act:null};
+  for(let i=0;i<S.length;i++){
+    const s=S[i],a=s.a,next=S[i+1];
+    const back=Math.hypot(a.endPt.x-plan.restPt.x,a.endPt.y-plan.restPt.y)/MAX_V;
+    const endInf=next?next.departT:a.freeEnd+back;
+    if(t>=endInf)continue;
+    if(t<s.arriveT){const u=clamp01((t-s.departT)/((s.arriveT-s.departT)||1));
+      return {pt:lerp(s.fromPt,a.start,easeIO(u)),act:a};}
+    if(a.trace){
+      if(t<a.moveStart)return {pt:a.start,act:a};
+      const u=clamp01((t-a.moveStart)/((a.moveEnd-a.moveStart)||1));
+      return {pt:alongPoly(a.path,u),act:a};
+    }
+    if(a.freeEnd>a.t0&&t<=a.freeEnd)return {pt:a.start,act:a};  // holding
+    if(next)return {pt:a.endPt,act:a};                          // wait at note for next move
+    const u=clamp01((t-a.freeEnd)/(back||1));                   // last action: drift back to rest
+    return {pt:lerp(a.endPt,plan.restPt,easeIO(u)),act:a};
+  }
+  return {pt:plan.restPt,act:null};
+}
+function solveChart(W){
+  if(!chart){solverPlan=null;return;}
+  W=W||SOLVER_W;
+  const acts=buildActions(chart), asg=assignHands(acts,W);
+  solverPlan={L:planHand(asg.L,handRest.L),R:planHand(asg.R,handRest.R)};
+}
+// Place the hands for time t and feed the pressing ones into the input pipeline.
+function applySolverAt(t,judge){
+  if(!solverPlan)return;
+  const pts=[];
+  for(const H of ['L','R']){
+    const st=solveHandState(solverPlan[H],t), a=st.act;
+    hands[H].x=st.pt.x;hands[H].y=st.pt.y;
+    let down=false;
+    if(a){
+      const gw=(a.kind==='touch'||a.kind==='touchHold')?TWIN.good:NWIN.good;
+      if(a.trace)down=t>=a.t0-0.05&&t<=a.moveEnd;
+      else if(a.freeEnd>a.t0)down=t>=a.t0-0.03&&t<=a.freeEnd;
+      else down=t>=a.t0-0.05&&t<=a.t0+gw;
+      if(down&&!a.trace&&Math.hypot(hands[H].x-a.start.x,hands[H].y-a.start.y)>INPUT_R*1.2)down=false;
+    }
+    handDown[H]=down;
+    if(down)pts.push({x:hands[H].x,y:hands[H].y,r:INPUT_R});
+  }
+  triggerInput(pts);
+  if(judge)judgeInput(activeSensors);
+}
+// Headless slide clearing (the renderer does this live; the tuner needs it too).
+function updateSlideClears(t){
+  for(const nt of chart.notes){
+    if(nt.type!=='slide'||nt.bad)continue;
+    ensureSlideCache(nt);
+    nt._clearMax=clearedIndex(nt._sens,-1,nt._clearMax);
+  }
+}
+// ---- offline weight auto-tuning (the "learning" half of the hybrid) ----
+// Fitness = the achievement % a full headless play-through earns. Simple
+// hill-climb over the cost weights; achievement % is a real objective because
+// unreachable assignments actually miss under the MAX_V speed cap.
+function evalWeights(W){
+  const t0=curT, wasAuto=autoMode; autoMode=false;
+  solveChart(W); resetJudgments();
+  const dt=1/90, end=chart.duration;
+  for(let t=0;t<=end;t+=dt){
+    curT=t; applySolverAt(t,true);
+    updateSlideClears(t); updateMisses(t); updateSlideJudgments(t); updateHolds(t,dt);
+  }
+  const a=computeAchievement();
+  curT=t0; autoMode=wasAuto;
+  return a?a.total:0;
+}
+function tuneSolver(){
+  if(!chart)return;
+  const log=[], keys=Object.keys(SOLVER_W);
+  let best={...SOLVER_W}, bestScore=evalWeights(best);
+  log.push('start '+bestScore.toFixed(3)+'%');
+  for(let it=0;it<36;it++){
+    const cand={...best}, nk=1+(Math.random()<0.5?1:0);
+    for(let j=0;j<nk;j++){const k=keys[(Math.random()*keys.length)|0];
+      cand[k]=Math.max(1e-4,best[k]*(0.55+Math.random()*1.1));}
+    const s=evalWeights(cand);
+    if(s>bestScore+1e-6){best=cand;bestScore=s;log.push('it'+it+' ↑ '+s.toFixed(3)+'%');}
+  }
+  SOLVER_W=best; solveChart(SOLVER_W); resetJudgments();
+  log.push('best '+bestScore.toFixed(3)+'%  '+JSON.stringify(
+    Object.fromEntries(Object.entries(best).map(([k,v])=>[k,+v.toFixed(3)]))));
+  const c=$('console'); if(c)c.textContent=log.join('\n');
+  frame(true);
 }
 
 /* ============================ frame composition ============================ */
@@ -1267,14 +1479,14 @@ function loadFromSource(){
       $('diffwrap').style.display='';
       const build=k=>{let b=ex.charts[k];chart=parseSimai(b,parseFloat(meta.bpm)||undefined);
         const f=parseFloat(meta.first)||0;
-        applyLeadIn(chart,f);linkSlideHeads(chart);};
+        applyLeadIn(chart,f);linkSlideHeads(chart);if(solverMode)solveChart(SOLVER_W);};
       build(parseInt(sel.value,10));
       sel.onchange=()=>{build(parseInt(sel.value,10));resetTransport();showInfo(meta,parseInt(sel.value,10));};
       showInfo(meta,parseInt(sel.value,10));
     }else{
       $('diffwrap').style.display='none';
       chart=parseSimai(body);
-      applyLeadIn(chart,0);linkSlideHeads(chart);
+      applyLeadIn(chart,0);linkSlideHeads(chart);if(solverMode)solveChart(SOLVER_W);
       showInfo({},null);
     }
     resetTransport();
@@ -1346,6 +1558,7 @@ function resetTransport(){curT=0;playing=false;syncPlayState();
 function updateLabel(){$('tlabel').textContent=`${curT.toFixed(2)} / ${(chart?chart.duration:0).toFixed(2)}`;}
 
 function frame(force){
+  if(solverMode&&!playing)applySolverAt(curT,false);   // pose hands while scrubbing/paused (no judging)
   render(chart,curT);drawMini(chart,curT);updateCounts();
   if(!force){$('seek').value=curT;updateLabel();}
 }
@@ -1367,6 +1580,7 @@ function loop(ts){
     if(chart&&curT>=chart.duration){curT=chart.duration;playing=false;syncPlayState();stopAllHoldTones();}
     syncMedia();   // start / pause / coarse-seek the media toward curT as needed
     fireSounds(prevT,curT);
+    if(solverMode)applySolverAt(curT,true);   // hands play the chart: place + press + judge
     updateMisses(curT);
     updateSlideJudgments(curT);
     updateHolds(curT,raw);
@@ -1599,6 +1813,14 @@ $('lightups').onchange=e=>{lightupsOn=e.target.checked;frame(true);};
 $('slideShow').oninput=e=>{slideShowingSpeed=parseFloat(e.target.value);$('slideShowVal').textContent=slideShowingSpeed.toFixed(1);frame(true);};
 $('soundOn').onchange=e=>{soundOn=e.target.checked;if(soundOn)ensureAudio();};
 $('autoMode').onchange=e=>{autoMode=e.target.checked;resetJudgments();frame(true);};
+$('solveMode').onchange=e=>{
+  solverMode=e.target.checked;
+  const am=$('autoMode');
+  if(solverMode){am.checked=false;am.disabled=true;autoMode=false;solveChart(SOLVER_W);}
+  else{am.disabled=false;autoMode=am.checked;}
+  resetJudgments();frame(true);
+};
+$('tuneBtn').onclick=()=>tuneSolver();
 $('folder').onchange=e=>{if(e.target.files&&e.target.files.length)loadFolder(e.target.files);};
 $('showPv').onchange=e=>{pvEnabled=e.target.checked;frame(true);};
 // Settings tabs
